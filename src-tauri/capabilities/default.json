@@ -16,6 +16,7 @@
     {
       "identifier": "fs:allow-write-file",
       "allow": [{ "path": "**" }]
-    }
+    },
+    "process:default"
   ]
 }
