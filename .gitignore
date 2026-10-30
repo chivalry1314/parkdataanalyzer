@@ -26,3 +26,8 @@ dist-ssr
 # Tauri
 src-tauri/target
 src-tauri/gen
+
+# VitePress
+docs/.vitepress/dist
+docs/.vitepress/.temp
+docs/.vitepress/cache
