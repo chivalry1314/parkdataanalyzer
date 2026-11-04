@@ -57,6 +57,13 @@ const recordsError = ref("");
 const exporting = ref(false);
 const exportError = ref("");
 
+const toast = ref<{ show: boolean; message: string; type: "success" | "error" }>({
+  show: false,
+  message: "",
+  type: "success",
+});
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
 const view = ref<"list" | "plates" | "detail" | "records">("list");
 
 const selectedPlateDetail = computed<BuildingChargePlateDetail | null>(() => {
@@ -64,7 +71,22 @@ const selectedPlateDetail = computed<BuildingChargePlateDetail | null>(() => {
 });
 
 function doSearch() {
+  if (!filters.value.building.trim()) {
+    showToast("请输入楼栋号", "error");
+    return;
+  } else if (!filters.value.unit.trim()) {
+    showToast("请输入单元号", "error");
+    return;
+  }
   emit("search", { ...filters.value });
+}
+
+function showToast(message: string, type: "success" | "error" = "success") {
+  toast.value = { show: true, message, type };
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.value.show = false;
+  }, 3000);
 }
 
 function resetSearch() {
@@ -154,8 +176,11 @@ async function exportExcel() {
   exportError.value = "";
   try {
     await exportBuildingCharges(filePath, { ...filters.value });
+    showToast("导出成功", "success");
   } catch (err) {
-    exportError.value = `导出失败：${err instanceof Error ? err.message : String(err)}`;
+    const msg = err instanceof Error ? err.message : String(err);
+    exportError.value = `导出失败：${msg}`;
+    showToast(`导出失败：${msg}`, "error");
   } finally {
     exporting.value = false;
   }
@@ -185,8 +210,11 @@ async function exportVehicleExcel() {
       exitTimeStart: filters.value.exitTimeStart,
       exitTimeEnd: filters.value.exitTimeEnd,
     });
+    showToast("导出成功", "success");
   } catch (err) {
-    exportError.value = `导出失败：${err instanceof Error ? err.message : String(err)}`;
+    const msg = err instanceof Error ? err.message : String(err);
+    exportError.value = `导出失败：${msg}`;
+    showToast(`导出失败：${msg}`, "error");
   } finally {
     exporting.value = false;
   }
@@ -320,7 +348,7 @@ defineExpose({ setItems });
         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3"
       >
         <div>
-          <label class="block text-xs text-slate-500 mb-1">楼栋号</label>
+          <label class="block text-xs text-slate-500 mb-1">楼栋号（必填）</label>
           <input
             v-model="filters.building"
             type="text"
@@ -329,7 +357,7 @@ defineExpose({ setItems });
           />
         </div>
         <div>
-          <label class="block text-xs text-slate-500 mb-1">单元号</label>
+          <label class="block text-xs text-slate-500 mb-1">单元号（必填）</label>
           <input
             v-model="filters.unit"
             type="text"
@@ -410,21 +438,27 @@ defineExpose({ setItems });
     <div class="overflow-auto flex-1 p-4">
       <!-- List View -->
       <div v-if="view === 'list'">
-        <table class="min-w-full text-sm text-left">
-          <thead class="bg-slate-100 text-slate-600 sticky top-0">
-            <tr>
-              <th class="px-4 py-3 font-medium">楼栋</th>
-              <th class="px-4 py-3 font-medium">单元</th>
-              <th class="px-4 py-3 font-medium">房间</th>
-              <th class="px-4 py-3 font-medium text-right">车牌数</th>
-              <th class="px-4 py-3 font-medium text-right">记录数</th>
-              <th class="px-4 py-3 font-medium text-right">应收金额</th>
-              <th class="px-4 py-3 font-medium text-right">实收金额</th>
-              <th class="px-4 py-3 font-medium text-right">欠费金额</th>
-              <th class="px-4 py-3 font-medium">操作</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y">
+        <div v-if="loading" class="text-center py-12 text-slate-500">
+          <div class="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-3"></div>
+          <p>正在加载楼栋收费数据...</p>
+        </div>
+
+        <template v-else>
+          <table class="min-w-full text-sm text-left">
+            <thead class="bg-slate-100 text-slate-600 sticky top-0">
+              <tr>
+                <th class="px-4 py-3 font-medium">楼栋</th>
+                <th class="px-4 py-3 font-medium">单元</th>
+                <th class="px-4 py-3 font-medium">房间</th>
+                <th class="px-4 py-3 font-medium text-right">车牌数</th>
+                <th class="px-4 py-3 font-medium text-right">记录数</th>
+                <th class="px-4 py-3 font-medium text-right">应收金额</th>
+                <th class="px-4 py-3 font-medium text-right">实收金额</th>
+                <th class="px-4 py-3 font-medium text-right">欠费金额</th>
+                <th class="px-4 py-3 font-medium">操作</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
             <tr
               v-for="item in items"
               :key="`${item.building}-${item.unit}-${item.room}`"
@@ -486,6 +520,7 @@ defineExpose({ setItems });
             </button>
           </div>
         </div>
+      </template>
       </div>
 
       <!-- Plate List View -->
@@ -699,5 +734,22 @@ defineExpose({ setItems });
         </div>
       </div>
     </div>
+
+    <transition
+      enter-active-class="transition ease-out duration-300"
+      enter-from-class="translate-y-2 opacity-0"
+      enter-to-class="translate-y-0 opacity-100"
+      leave-active-class="transition ease-in duration-200"
+      leave-from-class="translate-y-0 opacity-100"
+      leave-to-class="translate-y-2 opacity-0"
+    >
+      <div
+        v-if="toast.show"
+        class="fixed bottom-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium max-w-xs"
+        :class="toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'"
+      >
+        {{ toast.message }}
+      </div>
+    </transition>
   </div>
 </template>
