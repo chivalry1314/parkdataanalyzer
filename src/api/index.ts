@@ -251,6 +251,12 @@ export const cleanFreeCarAddresses = () => invoke<number>("clean_free_car_addres
 export const cleanMonthlyRentalAddresses = () =>
   invoke<number>("clean_monthly_rental_addresses_command");
 
+export const updateFreeCar = (record: FreeCar) =>
+  invoke<number>("update_free_car_command", { record });
+
+export const updateMonthlyRental = (record: MonthlyRentalVehicle) =>
+  invoke<number>("update_monthly_rental_command", { record });
+
 export const getBuildingCharges = async (filter: BuildingChargesFilters): Promise<Paginated<BuildingChargeItem>> => {
   const raw = await invoke<RawPaginated<BuildingChargeItem>>("get_building_charges_command", {
     filter: {

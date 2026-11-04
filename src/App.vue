@@ -28,6 +28,8 @@ import {
   saveFreeCars,
   saveMonthlyRentals,
   saveRecords,
+  updateFreeCar,
+  updateMonthlyRental,
 } from "./api";
 import type {
   BuildingChargesFilters,
@@ -114,6 +116,8 @@ const freeCarFilters = ref<FreeCarFilters>({
 const appliedFreeCarFilters = ref<FreeCarFilters>({ ...freeCarFilters.value });
 
 const buildingChargesRef = ref<InstanceType<typeof BuildingCharges> | null>(null);
+const monthlyRentalsRef = ref<InstanceType<typeof MonthlyRentals> | null>(null);
+const freeCarsRef = ref<InstanceType<typeof FreeCars> | null>(null);
 const buildingChargesLoading = ref(false);
 const buildingChargesFilters = ref<BuildingChargesFilters>({
   building: "",
@@ -301,6 +305,28 @@ async function handleFreeCarSearch(newFilters: FreeCarFilters) {
   freeCarFilters.value = { ...newFilters };
   freeCarPage.value = 1;
   await loadFreeCars();
+}
+
+async function handleSaveFreeCar(record: FreeCar) {
+  try {
+    await updateFreeCar(record);
+    showInfo("免费车记录已保存");
+    await loadFreeCars();
+    freeCarsRef.value?.closeModal();
+  } catch (err) {
+    showError(`保存失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function handleSaveMonthlyRental(record: MonthlyRentalVehicle) {
+  try {
+    await updateMonthlyRental(record);
+    showInfo("月租车记录已保存");
+    await loadMonthlyRentals();
+    monthlyRentalsRef.value?.closeModal();
+  } catch (err) {
+    showError(`保存失败：${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 async function handleFreeCarReset() {
@@ -737,6 +763,7 @@ onMounted(async () => {
           />
           <MonthlyRentals
             v-else-if="activeMenu === 'monthly'"
+            ref="monthlyRentalsRef"
             v-model:page="monthlyPage"
             :page-size="monthlyPageSize"
             :filters="monthlyFilters"
@@ -746,12 +773,14 @@ onMounted(async () => {
             :cleaning="cleaningAddresses"
             @search="handleMonthlySearch"
             @reset="handleMonthlyReset"
+            @save="handleSaveMonthlyRental"
             @update:page-size="(v) => { monthlyPageSize = v; monthlyPage = 1; loadMonthlyRentals(); }"
             @clean-addresses="handleCleanMonthlyRentalAddresses"
             @import-zip="selectFile('monthly')"
           />
           <FreeCars
             v-else-if="activeMenu === 'free'"
+            ref="freeCarsRef"
             v-model:page="freeCarPage"
             :page-size="freeCarPageSize"
             :filters="freeCarFilters"
@@ -761,6 +790,7 @@ onMounted(async () => {
             :cleaning="cleaningAddresses"
             @search="handleFreeCarSearch"
             @reset="handleFreeCarReset"
+            @save="handleSaveFreeCar"
             @update:page-size="(v) => { freeCarPageSize = v; freeCarPage = 1; loadFreeCars(); }"
             @clean-addresses="handleCleanFreeCarAddresses"
             @import-zip="selectFile('free')"

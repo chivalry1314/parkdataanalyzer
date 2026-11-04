@@ -22,6 +22,8 @@ use commands::records::{
     list_monthly_rentals_command,
     save_free_cars_command,
     save_monthly_rentals_command,
+    update_free_car_command,
+    update_monthly_rental_command,
 };
 use tauri::Manager;
 
@@ -66,6 +68,8 @@ fn main() {
             clean_monthly_rental_addresses_command,
             get_building_charges_command,
             get_building_charge_detail_command,
+            update_free_car_command,
+            update_monthly_rental_command,
             get_backend_info_command,
         ])
         .run(tauri::generate_context!())

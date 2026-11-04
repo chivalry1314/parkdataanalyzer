@@ -19,7 +19,12 @@ const emit = defineEmits<{
   (e: "reset"): void;
   (e: "clean-addresses"): void;
   (e: "import-zip"): void;
+  (e: "save", value: MonthlyRentalVehicle): void;
 }>();
+
+const showModal = ref(false);
+const draft = ref<MonthlyRentalVehicle | null>(null);
+const saving = ref(false);
 
 const expanded = ref(false);
 const pendingFilters = ref<MonthlyRentalFilters>({ ...props.filters });
@@ -60,6 +65,25 @@ function setPage(value: number) {
 
 const totalPages = () => Math.max(1, Math.ceil(props.total / props.pageSize));
 const startIndex = () => (props.page - 1) * props.pageSize + 1;
+
+function startEdit(record: MonthlyRentalVehicle) {
+  draft.value = { ...record };
+  showModal.value = true;
+}
+
+function closeModal() {
+  showModal.value = false;
+  draft.value = null;
+  saving.value = false;
+}
+
+function saveEdit() {
+  if (!draft.value) return;
+  saving.value = true;
+  emit("save", { ...draft.value });
+}
+
+defineExpose({ closeModal });
 </script>
 
 <template>
@@ -198,6 +222,7 @@ const startIndex = () => (props.page - 1) * props.pageSize + 1;
             <th class="px-4 py-3 font-medium">车位组</th>
             <th class="px-4 py-3 font-medium text-right">车位数量</th>
             <th class="px-4 py-3 font-medium">来源文件</th>
+            <th class="px-4 py-3 font-medium">操作</th>
           </tr>
         </thead>
         <tbody class="divide-y">
@@ -217,14 +242,136 @@ const startIndex = () => (props.page - 1) * props.pageSize + 1;
             <td class="px-4 py-3">{{ record.parkingGroup || "--" }}</td>
             <td class="px-4 py-3 text-right">{{ record.parkingSpaceCount }}</td>
             <td class="px-4 py-3 text-slate-500">{{ record.sourceFile }}</td>
+            <td class="px-4 py-3">
+              <button
+                @click="startEdit(record)"
+                class="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-medium transition"
+              >
+                编辑
+              </button>
+            </td>
           </tr>
           <tr v-if="records.length === 0">
-            <td colspan="11" class="px-4 py-12 text-center text-slate-400">
+            <td colspan="12" class="px-4 py-12 text-center text-slate-400">
               暂无记录
             </td>
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <div
+      v-if="showModal && draft"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      @click.self="closeModal"
+    >
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 flex flex-col max-h-[90vh]">
+        <div class="p-4 border-b flex items-center justify-between">
+          <h3 class="text-lg font-semibold text-slate-800">编辑月租车</h3>
+          <button
+            @click="closeModal"
+            class="text-slate-400 hover:text-slate-600"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+            </svg>
+          </button>
+        </div>
+        <div class="p-4 overflow-auto space-y-4">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">车牌号</label>
+            <input
+              v-model="draft.plate"
+              type="text"
+              class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">车辆类型</label>
+            <input
+              v-model="draft.vehicleType"
+              type="text"
+              class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">车主电话</label>
+            <input
+              v-model="draft.ownerPhone"
+              type="text"
+              class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">车主姓名</label>
+            <input
+              v-model="draft.ownerName"
+              type="text"
+              class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">车主地址</label>
+            <input
+              v-model="draft.ownerAddress"
+              type="text"
+              class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">开始有效时间</label>
+              <input
+                v-model="draft.startDate"
+                type="date"
+                class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">结束有效时间</label>
+              <input
+                v-model="draft.endDate"
+                type="date"
+                class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">车位组</label>
+              <input
+                v-model="draft.parkingGroup"
+                type="text"
+                class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">车位数量</label>
+              <input
+                v-model.number="draft.parkingSpaceCount"
+                type="number"
+                class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+        </div>
+        <div class="p-4 border-t flex justify-end gap-3">
+          <button
+            @click="closeModal"
+            :disabled="saving"
+            class="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-lg text-sm font-medium transition"
+          >
+            取消
+          </button>
+          <button
+            @click="saveEdit"
+            :disabled="saving"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition"
+          >
+            {{ saving ? "保存中..." : "保存" }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <div class="p-4 border-t flex items-center justify-between">

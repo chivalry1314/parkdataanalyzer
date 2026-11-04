@@ -92,6 +92,16 @@ pub fn get_building_charges_command(filter: BuildingChargesFilter) -> Result<Pag
 }
 
 #[tauri::command]
+pub fn update_monthly_rental_command(record: MonthlyRentalVehicle) -> Result<usize, String> {
+    db::update_monthly_rental(record)
+}
+
+#[tauri::command]
+pub fn update_free_car_command(record: FreeCar) -> Result<usize, String> {
+    db::update_free_car(record)
+}
+
+#[tauri::command]
 pub fn get_building_charge_detail_command(filter: BuildingChargesFilter) -> Result<Vec<BuildingChargePlateDetail>, String> {
     db::get_building_charge_detail(filter)
 }

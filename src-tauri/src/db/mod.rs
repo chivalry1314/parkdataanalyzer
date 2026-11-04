@@ -834,6 +834,50 @@ pub fn clear_free_cars() -> Result<usize, String> {
     Ok(count)
 }
 
+pub fn update_monthly_rental(record: MonthlyRentalVehicle) -> Result<usize, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let (building, unit, room) = parse_building_unit_room(&record.owner_address);
+    let count = conn.execute(
+        "UPDATE monthly_rental_vehicles SET
+            plate = ?1, parking_space = ?2, vehicle_type = ?3, owner_phone = ?4,
+            owner_name = ?5, owner_address = ?6, start_date = ?7, end_date = ?8,
+            parking_group = ?9, parking_space_count = ?10, source_file = ?11,
+            building = ?12, unit = ?13, room = ?14
+        WHERE id = ?15",
+        rusqlite::params![
+            record.plate.trim(), record.parking_space, record.vehicle_type,
+            record.owner_phone, record.owner_name, record.owner_address,
+            record.start_date, record.end_date, record.parking_group,
+            record.parking_space_count, record.source_file,
+            building, unit, room, record.id
+        ]
+    ).map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+pub fn update_free_car(record: FreeCar) -> Result<usize, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let (building, unit, room) = parse_building_unit_room(&record.owner_address);
+    let count = conn.execute(
+        "UPDATE free_cars SET
+            plate = ?1, parking_space = ?2, vehicle_type = ?3, owner_phone = ?4,
+            owner_name = ?5, owner_address = ?6, start_date = ?7, end_date = ?8,
+            parking_group = ?9, parking_space_count = ?10, source_file = ?11,
+            building = ?12, unit = ?13, room = ?14
+        WHERE id = ?15",
+        rusqlite::params![
+            record.plate.trim(), record.parking_space, record.vehicle_type,
+            record.owner_phone, record.owner_name, record.owner_address,
+            record.start_date, record.end_date, record.parking_group,
+            record.parking_space_count, record.source_file,
+            building, unit, room, record.id
+        ]
+    ).map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
 fn clean_owner_addresses(table: &str) -> Result<usize, String> {
     use once_cell::sync::Lazy;
     use regex::Regex;
