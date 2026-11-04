@@ -1,6 +1,13 @@
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
-import type { ParseResult, ParkingRecord } from "../types";
+import type {
+  FreeCar,
+  FreeCarParseResult,
+  MonthlyRentalParseResult,
+  MonthlyRentalVehicle,
+  ParseResult,
+  ParkingRecord,
+} from "../types";
 
 const HEADER_KEY = "车牌号";
 
@@ -28,6 +35,34 @@ const EXPECTED_HEADERS = [
   "放行方式",
   "操作者",
   "备注",
+];
+
+const MONTHLY_HEADER_KEY = "车牌号";
+
+const MONTHLY_EXPECTED_HEADERS = [
+  "车牌号",
+  "车位",
+  "车辆类型",
+  "车主电话",
+  "车主姓名",
+  "车主地址",
+  "开始有效时间",
+  "结束有效时间",
+  "车位组",
+  "车位数量",
+];
+
+const FREE_CAR_HEADER_KEY = "车牌号";
+
+const FREE_CAR_EXPECTED_HEADERS = [
+  "车牌号",
+  "车位",
+  "车辆类型",
+  "车主电话",
+  "车主姓名",
+  "车主地址",
+  "开始有效时间",
+  "结束有效时间",
 ];
 
 function parseMoney(value: unknown): number {
@@ -61,6 +96,133 @@ function parseDurationMinutes(value: string): number {
 
 function normalizeHeader(value: unknown): string {
   return String(value || "").trim();
+}
+
+function normalizeMonthlyHeader(value: unknown): string {
+  const s = String(value || "").trim();
+  return s.replace(/^\*+/, "");
+}
+
+function findMonthlyHeaderRow(rows: unknown[][]): { rowIndex: number; headers: string[] } | null {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!Array.isArray(row)) continue;
+    const normalized = row.map(normalizeMonthlyHeader);
+    if (normalized.includes(MONTHLY_HEADER_KEY)) {
+      return { rowIndex: i, headers: normalized };
+    }
+  }
+  return null;
+}
+
+function parseParkingSpaceCount(value: unknown): number {
+  if (value === null || value === undefined || value === "") return 0;
+  const n = Number(String(value).trim());
+  return Number.isNaN(n) ? 0 : n;
+}
+
+function parseBuildingUnitRoom(address: string): { building: string; unit: string; room: string } {
+  const parts = address.split("-");
+  if (parts.length >= 3) {
+    return { building: parts[0], unit: parts[1], room: parts[2] };
+  }
+  if (parts.length === 2) {
+    return { building: parts[0], unit: parts[1], room: "" };
+  }
+  if (parts.length === 1 && parts[0]) {
+    return { building: parts[0], unit: "", room: "" };
+  }
+  return { building: "", unit: "", room: "" };
+}
+
+function buildMonthlyRecord(
+  row: unknown[],
+  headers: string[],
+  sourceFile: string,
+  id: number
+): MonthlyRentalVehicle | null {
+  const get = (name: string): string => {
+    const idx = headers.indexOf(name);
+    if (idx === -1) return "";
+    const v = row[idx];
+    if (v === null || v === undefined) return "";
+    return String(v).trim();
+  };
+
+  const plate = get("车牌号");
+  if (!plate) return null;
+
+  const ownerAddress = get("车主地址");
+  const { building, unit, room } = parseBuildingUnitRoom(ownerAddress);
+
+  return {
+    id,
+    plate,
+    parkingSpace: get("车位"),
+    vehicleType: get("车辆类型"),
+    ownerPhone: get("车主电话"),
+    ownerName: get("车主姓名"),
+    ownerAddress,
+    startDate: get("开始有效时间"),
+    endDate: get("结束有效时间"),
+    parkingGroup: get("车位组"),
+    parkingSpaceCount: parseParkingSpaceCount(row[headers.indexOf("车位数量")] ?? 0),
+    sourceFile,
+    building,
+    unit,
+    room,
+  };
+}
+
+function findFreeCarHeaderRow(rows: unknown[][]): { rowIndex: number; headers: string[] } | null {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!Array.isArray(row)) continue;
+    const normalized = row.map(normalizeMonthlyHeader);
+    if (normalized.includes(FREE_CAR_HEADER_KEY)) {
+      return { rowIndex: i, headers: normalized };
+    }
+  }
+  return null;
+}
+
+function buildFreeCarRecord(
+  row: unknown[],
+  headers: string[],
+  sourceFile: string,
+  id: number
+): FreeCar | null {
+  const get = (name: string): string => {
+    const idx = headers.indexOf(name);
+    if (idx === -1) return "";
+    const v = row[idx];
+    if (v === null || v === undefined) return "";
+    return String(v).trim();
+  };
+
+  const plate = get("车牌号");
+  if (!plate) return null;
+
+  const ownerAddress = get("车主地址");
+  const { building, unit, room } = parseBuildingUnitRoom(ownerAddress);
+
+  return {
+    id,
+    plate,
+    parkingSpace: get("车位"),
+    vehicleType: get("车辆类型"),
+    ownerPhone: get("车主电话"),
+    ownerName: get("车主姓名"),
+    ownerAddress,
+    startDate: get("开始有效时间"),
+    endDate: get("结束有效时间"),
+    parkingGroup: "",
+    parkingSpaceCount: 0,
+    sourceFile,
+    building,
+    unit,
+    room,
+  };
 }
 
 function findHeaderRow(rows: unknown[][]): { rowIndex: number; headers: string[] } | null {
@@ -169,6 +331,124 @@ export async function parseZipFile(
           continue;
         }
         const record = buildRecord(row, headers, name, idCounter++);
+        if (record) {
+          records.push(record);
+        }
+      }
+    } catch (err) {
+      errors.push(`解析文件 ${name} 失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return { records, errors };
+}
+
+export async function parseFreeCarZipFile(
+  data: Uint8Array,
+  onProgress?: (current: number, total: number, fileName: string) => void
+): Promise<FreeCarParseResult> {
+  const zip = await JSZip.loadAsync(data);
+  const records: FreeCar[] = [];
+  const errors: string[] = [];
+  let idCounter = 1;
+
+  const xlsxFiles: { name: string; content: JSZip.JSZipObject }[] = [];
+  zip.forEach((relativePath, file) => {
+    if (!file.dir && relativePath.toLowerCase().endsWith(".xlsx")) {
+      xlsxFiles.push({ name: relativePath.split("/").pop() || relativePath, content: file });
+    }
+  });
+
+  xlsxFiles.sort((a, b) => a.name.localeCompare(b.name));
+  const totalFiles = xlsxFiles.length;
+
+  for (let i = 0; i < xlsxFiles.length; i++) {
+    const { name, content } = xlsxFiles[i];
+    onProgress?.(i + 1, totalFiles, name);
+    try {
+      const buffer = await content.async("uint8array");
+      const workbook = XLSX.read(buffer, { type: "array", cellText: true, cellDates: false });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false }) as unknown[][];
+
+      const headerInfo = findFreeCarHeaderRow(rows);
+      if (!headerInfo) {
+        errors.push(`文件 ${name} 中未找到表头，已跳过`);
+        continue;
+      }
+
+      const { rowIndex, headers } = headerInfo;
+      const missing = FREE_CAR_EXPECTED_HEADERS.filter((h) => !headers.includes(h));
+      if (missing.length > 0) {
+        errors.push(`文件 ${name} 缺少字段：${missing.join("、")}`);
+      }
+
+      for (let i = rowIndex + 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!Array.isArray(row) || row.every((c) => c === null || c === undefined || String(c).trim() === "")) {
+          continue;
+        }
+        const record = buildFreeCarRecord(row, headers, name, idCounter++);
+        if (record) {
+          records.push(record);
+        }
+      }
+    } catch (err) {
+      errors.push(`解析文件 ${name} 失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return { records, errors };
+}
+
+export async function parseMonthlyRentalZipFile(
+  data: Uint8Array,
+  onProgress?: (current: number, total: number, fileName: string) => void
+): Promise<MonthlyRentalParseResult> {
+  const zip = await JSZip.loadAsync(data);
+  const records: MonthlyRentalVehicle[] = [];
+  const errors: string[] = [];
+  let idCounter = 1;
+
+  const xlsxFiles: { name: string; content: JSZip.JSZipObject }[] = [];
+  zip.forEach((relativePath, file) => {
+    if (!file.dir && relativePath.toLowerCase().endsWith(".xlsx")) {
+      xlsxFiles.push({ name: relativePath.split("/").pop() || relativePath, content: file });
+    }
+  });
+
+  xlsxFiles.sort((a, b) => a.name.localeCompare(b.name));
+  const totalFiles = xlsxFiles.length;
+
+  for (let i = 0; i < xlsxFiles.length; i++) {
+    const { name, content } = xlsxFiles[i];
+    onProgress?.(i + 1, totalFiles, name);
+    try {
+      const buffer = await content.async("uint8array");
+      const workbook = XLSX.read(buffer, { type: "array", cellText: true, cellDates: false });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false }) as unknown[][];
+
+      const headerInfo = findMonthlyHeaderRow(rows);
+      if (!headerInfo) {
+        errors.push(`文件 ${name} 中未找到表头，已跳过`);
+        continue;
+      }
+
+      const { rowIndex, headers } = headerInfo;
+      const missing = MONTHLY_EXPECTED_HEADERS.filter((h) => !headers.includes(h));
+      if (missing.length > 0) {
+        errors.push(`文件 ${name} 缺少字段：${missing.join("、")}`);
+      }
+
+      for (let i = rowIndex + 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!Array.isArray(row) || row.every((c) => c === null || c === undefined || String(c).trim() === "")) {
+          continue;
+        }
+        const record = buildMonthlyRecord(row, headers, name, idCounter++);
         if (record) {
           records.push(record);
         }

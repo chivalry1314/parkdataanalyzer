@@ -2,33 +2,61 @@
 import { onMounted, ref, watch } from "vue";
 import { confirm, message, open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
+import BuildingCharges from "./components/BuildingCharges.vue";
 import FilterStats from "./components/FilterStats.vue";
+import FreeCars from "./components/FreeCars.vue";
+import MonthlyRentals from "./components/MonthlyRentals.vue";
 import RecordList from "./components/RecordList.vue";
 import StatsPanel from "./components/StatsPanel.vue";
 import VehicleCharges from "./components/VehicleCharges.vue";
 import Onboarding from "./views/Onboarding.vue";
 import Settings from "./views/Settings.vue";
-import { parseZipFile } from "./utils/parser";
+import { parseFreeCarZipFile, parseMonthlyRentalZipFile, parseZipFile } from "./utils/parser";
 import {
+  cleanFreeCarAddresses,
+  cleanMonthlyRentalAddresses,
+  clearFreeCars,
+  clearMonthlyRentals,
   clearRecords,
+  getBackendInfo,
+  getBuildingCharges,
   getDbPath,
   getFilteredStats,
+  listFreeCars,
+  listMonthlyRentals,
   listRecords,
+  saveFreeCars,
+  saveMonthlyRentals,
   saveRecords,
 } from "./api";
-import type { ParkingRecord, RecordFilters, StatsSummary } from "./types";
+import type {
+  BuildingChargesFilters,
+  FreeCar,
+  FreeCarFilters,
+  MonthlyRentalFilters,
+  MonthlyRentalVehicle,
+  ParkingRecord,
+  RecordFilters,
+  StatsSummary,
+} from "./types";
 
 const loading = ref(false);
+const cleaningAddresses = ref(false);
 const progress = ref(0);
 const progressText = ref("准备中...");
 const messageText = ref("");
 const messageType = ref<"info" | "error">("info");
-const activeMenu = ref<"records" | "stats" | "vehicle" | "settings">("records");
+const activeMenu = ref<"records" | "stats" | "vehicle" | "monthly" | "free" | "building" | "settings">("records");
 const menuCollapsed = ref(false);
 const dbReady = ref<boolean | null>(null);
+const backendInfo = ref("");
+const dbPath = ref("");
 
 const menuItems = [
   { key: "records", label: "记录列表", short: "列" },
+  { key: "monthly", label: "月租车", short: "月" },
+  { key: "free", label: "免费车", short: "免" },
+  { key: "building", label: "楼栋收费", short: "栋" },
   { key: "vehicle", label: "车辆收费", short: "车" },
   { key: "stats", label: "统计分析", short: "统" },
   { key: "settings", label: "设置", short: "设" },
@@ -55,7 +83,49 @@ const filterStats = ref<StatsSummary | null>(null);
 const statsRefreshKey = ref(0);
 const filePath = ref("");
 
-async function selectFile() {
+const monthlyRecords = ref<MonthlyRentalVehicle[]>([]);
+const monthlyTotal = ref(0);
+const monthlyPage = ref(1);
+const monthlyPageSize = ref(20);
+const monthlyFilters = ref<MonthlyRentalFilters>({
+  plate: "",
+  ownerName: "",
+  vehicleType: "",
+  startDateStart: "",
+  startDateEnd: "",
+  endDateStart: "",
+  endDateEnd: "",
+});
+const appliedMonthlyFilters = ref<MonthlyRentalFilters>({ ...monthlyFilters.value });
+
+const freeCarRecords = ref<FreeCar[]>([]);
+const freeCarTotal = ref(0);
+const freeCarPage = ref(1);
+const freeCarPageSize = ref(20);
+const freeCarFilters = ref<FreeCarFilters>({
+  plate: "",
+  ownerName: "",
+  vehicleType: "",
+  startDateStart: "",
+  startDateEnd: "",
+  endDateStart: "",
+  endDateEnd: "",
+});
+const appliedFreeCarFilters = ref<FreeCarFilters>({ ...freeCarFilters.value });
+
+const buildingChargesRef = ref<InstanceType<typeof BuildingCharges> | null>(null);
+const buildingChargesLoading = ref(false);
+const buildingChargesFilters = ref<BuildingChargesFilters>({
+  building: "",
+  unit: "",
+  room: "",
+  entryTimeStart: "",
+  entryTimeEnd: "",
+  exitTimeStart: "",
+  exitTimeEnd: "",
+});
+
+async function selectFile(type: "records" | "monthly" | "free") {
   try {
     const selected = await open({
       multiple: false,
@@ -66,7 +136,7 @@ async function selectFile() {
     const path = Array.isArray(selected) ? selected[0] : selected;
     filePath.value = path;
     const data = await readFile(path);
-    await handleFileLoad(data, path);
+    await handleFileLoad(data, path, type);
   } catch (err) {
     handleError(err instanceof Error ? err.message : String(err));
   }
@@ -136,6 +206,147 @@ async function handleReset() {
   await loadRecords();
 }
 
+function monthlyFilterParams(filters: MonthlyRentalFilters) {
+  return {
+    plate: filters.plate || undefined,
+    ownerName: filters.ownerName || undefined,
+    vehicleType: filters.vehicleType || undefined,
+    startDateStart: filters.startDateStart || undefined,
+    startDateEnd: filters.startDateEnd || undefined,
+    endDateStart: filters.endDateStart || undefined,
+    endDateEnd: filters.endDateEnd || undefined,
+  };
+}
+
+async function loadMonthlyRentals() {
+  try {
+    const result = await listMonthlyRentals({
+      ...monthlyFilterParams(appliedMonthlyFilters.value),
+      page: monthlyPage.value,
+      perPage: monthlyPageSize.value,
+    });
+    monthlyRecords.value = result.items;
+    monthlyTotal.value = result.total;
+  } catch (err) {
+    showError(`加载月租车记录失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function handleMonthlySearch(newFilters: MonthlyRentalFilters) {
+  appliedMonthlyFilters.value = { ...newFilters };
+  monthlyFilters.value = { ...newFilters };
+  monthlyPage.value = 1;
+  await loadMonthlyRentals();
+}
+
+async function handleMonthlyReset() {
+  appliedMonthlyFilters.value = {
+    plate: "",
+    ownerName: "",
+    vehicleType: "",
+    startDateStart: "",
+    startDateEnd: "",
+    endDateStart: "",
+    endDateEnd: "",
+  };
+  monthlyFilters.value = { ...appliedMonthlyFilters.value };
+  monthlyPage.value = 1;
+  await loadMonthlyRentals();
+}
+
+async function handleCleanMonthlyRentalAddresses() {
+  cleaningAddresses.value = true;
+  try {
+    const count = await cleanMonthlyRentalAddresses();
+    showInfo(`已整理 ${count} 条月租车地址信息。`);
+    await message(`已整理 ${count} 条月租车地址信息。`, { title: "整理完成", kind: "info" });
+    await loadMonthlyRentals();
+  } catch (err) {
+    const text = `地址整理失败：${err instanceof Error ? err.message : String(err)}`;
+    showError(text);
+    await message(text, { title: "整理失败", kind: "error" });
+  } finally {
+    cleaningAddresses.value = false;
+  }
+}
+
+function freeCarFilterParams(filters: FreeCarFilters) {
+  return {
+    plate: filters.plate || undefined,
+    ownerName: filters.ownerName || undefined,
+    vehicleType: filters.vehicleType || undefined,
+    startDateStart: filters.startDateStart || undefined,
+    startDateEnd: filters.startDateEnd || undefined,
+    endDateStart: filters.endDateStart || undefined,
+    endDateEnd: filters.endDateEnd || undefined,
+  };
+}
+
+async function loadFreeCars() {
+  try {
+    const result = await listFreeCars({
+      ...freeCarFilterParams(appliedFreeCarFilters.value),
+      page: freeCarPage.value,
+      perPage: freeCarPageSize.value,
+    });
+    freeCarRecords.value = result.items;
+    freeCarTotal.value = result.total;
+  } catch (err) {
+    showError(`加载免费车记录失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function handleFreeCarSearch(newFilters: FreeCarFilters) {
+  appliedFreeCarFilters.value = { ...newFilters };
+  freeCarFilters.value = { ...newFilters };
+  freeCarPage.value = 1;
+  await loadFreeCars();
+}
+
+async function handleFreeCarReset() {
+  appliedFreeCarFilters.value = {
+    plate: "",
+    ownerName: "",
+    vehicleType: "",
+    startDateStart: "",
+    startDateEnd: "",
+    endDateStart: "",
+    endDateEnd: "",
+  };
+  freeCarFilters.value = { ...appliedFreeCarFilters.value };
+  freeCarPage.value = 1;
+  await loadFreeCars();
+}
+
+async function handleCleanFreeCarAddresses() {
+  cleaningAddresses.value = true;
+  try {
+    const count = await cleanFreeCarAddresses();
+    showInfo(`已整理 ${count} 条免费车地址信息。`);
+    await message(`已整理 ${count} 条免费车地址信息。`, { title: "整理完成", kind: "info" });
+    await loadFreeCars();
+  } catch (err) {
+    const text = `地址整理失败：${err instanceof Error ? err.message : String(err)}`;
+    showError(text);
+    await message(text, { title: "整理失败", kind: "error" });
+  } finally {
+    cleaningAddresses.value = false;
+  }
+}
+
+async function handleBuildingChargesSearch(filters: BuildingChargesFilters) {
+  buildingChargesFilters.value = { ...filters };
+  buildingChargesLoading.value = true;
+  try {
+    const items = await getBuildingCharges(filters);
+    buildingChargesRef.value?.setItems(items);
+  } catch (err) {
+    showError(`加载楼栋收费数据失败：${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    buildingChargesLoading.value = false;
+  }
+}
+
 function showInfo(text: string) {
   messageText.value = text;
   messageType.value = "info";
@@ -150,54 +361,140 @@ function closeMessage() {
   messageText.value = "";
 }
 
-async function handleFileLoad(data: Uint8Array, _path: string) {
+async function handleFileLoad(data: Uint8Array, _path: string, type: "records" | "monthly" | "free") {
   loading.value = true;
   progress.value = 0;
   progressText.value = "正在解压并解析 ZIP 文件...";
   messageText.value = "";
 
   try {
-    const result = await parseZipFile(data, (current, totalFiles, fileName) => {
-      progress.value = totalFiles > 0 ? Math.round((current / totalFiles) * 50) : 0;
-      progressText.value = `正在解析 ${fileName} (${current}/${totalFiles})`;
-    });
+    if (type === "monthly") {
+      const result = await parseMonthlyRentalZipFile(data, (current, totalFiles, fileName) => {
+        progress.value = totalFiles > 0 ? Math.round((current / totalFiles) * 50) : 0;
+        progressText.value = `正在解析 ${fileName} (${current}/${totalFiles})`;
+      });
 
-    if (result.records.length === 0 && result.errors.length === 0) {
-      showError("未在压缩包中找到有效的 Excel 记录文件。");
-      return;
+      if (result.records.length === 0 && result.errors.length === 0) {
+        showError("未在压缩包中找到有效的月租车 Excel 文件。");
+        return;
+      }
+
+      progress.value = 55;
+      progressText.value = `正在保存 ${result.records.length.toLocaleString()} 条月租车记录到数据库...`;
+      await saveMonthlyRentals({ records: result.records, replace: true });
+
+      progress.value = 75;
+      progressText.value = "正在整理月租车地址信息...";
+      const cleanedMonthly = await cleanMonthlyRentalAddresses();
+
+      progress.value = 100;
+      progressText.value = "处理完成";
+
+      const info = `成功处理 ${result.records.length.toLocaleString()} 条月租车记录，整理地址 ${cleanedMonthly} 条。`;
+      showInfo(info);
+      await message(info, { title: "处理完成", kind: "info" });
+
+      if (result.errors.length > 0) {
+        showError(result.errors.join("；"));
+      }
+
+      monthlyPage.value = 1;
+      appliedMonthlyFilters.value = {
+        plate: "",
+        ownerName: "",
+        vehicleType: "",
+        startDateStart: "",
+        startDateEnd: "",
+        endDateStart: "",
+        endDateEnd: "",
+      };
+      monthlyFilters.value = { ...appliedMonthlyFilters.value };
+      await loadMonthlyRentals();
+    } else if (type === "free") {
+      const result = await parseFreeCarZipFile(data, (current, totalFiles, fileName) => {
+        progress.value = totalFiles > 0 ? Math.round((current / totalFiles) * 50) : 0;
+        progressText.value = `正在解析 ${fileName} (${current}/${totalFiles})`;
+      });
+
+      if (result.records.length === 0 && result.errors.length === 0) {
+        showError("未在压缩包中找到有效的免费车 Excel 文件。");
+        return;
+      }
+
+      progress.value = 55;
+      progressText.value = `正在保存 ${result.records.length.toLocaleString()} 条免费车记录到数据库...`;
+      await saveFreeCars({ records: result.records, replace: true });
+
+      progress.value = 75;
+      progressText.value = "正在整理免费车地址信息...";
+      const cleanedFree = await cleanFreeCarAddresses();
+
+      progress.value = 100;
+      progressText.value = "处理完成";
+
+      const info = `成功处理 ${result.records.length.toLocaleString()} 条免费车记录，整理地址 ${cleanedFree} 条。`;
+      showInfo(info);
+      await message(info, { title: "处理完成", kind: "info" });
+
+      if (result.errors.length > 0) {
+        showError(result.errors.join("；"));
+      }
+
+      freeCarPage.value = 1;
+      appliedFreeCarFilters.value = {
+        plate: "",
+        ownerName: "",
+        vehicleType: "",
+        startDateStart: "",
+        startDateEnd: "",
+        endDateStart: "",
+        endDateEnd: "",
+      };
+      freeCarFilters.value = { ...appliedFreeCarFilters.value };
+      await loadFreeCars();
+    } else {
+      const result = await parseZipFile(data, (current, totalFiles, fileName) => {
+        progress.value = totalFiles > 0 ? Math.round((current / totalFiles) * 50) : 0;
+        progressText.value = `正在解析 ${fileName} (${current}/${totalFiles})`;
+      });
+
+      if (result.records.length === 0 && result.errors.length === 0) {
+        showError("未在压缩包中找到有效的 Excel 记录文件。");
+        return;
+      }
+
+      progress.value = 55;
+      progressText.value = `正在保存 ${result.records.length.toLocaleString()} 条记录到数据库...`;
+      await saveRecords({ records: result.records, replace: true });
+
+      progress.value = 100;
+      progressText.value = "处理完成";
+
+      const info = `成功处理 ${result.records.length.toLocaleString()} 条停车收费记录。`;
+      showInfo(info);
+      await message(info, { title: "处理完成", kind: "info" });
+
+      if (result.errors.length > 0) {
+        showError(result.errors.join("；"));
+      }
+
+      page.value = 1;
+      appliedFilters.value = {
+        plate: "",
+        ownerName: "",
+        vehicleType: "",
+        chargeType: "",
+        releaseMethod: "",
+        paymentMethod: "",
+        entryTimeStart: "",
+        entryTimeEnd: "",
+        exitTimeStart: "",
+        exitTimeEnd: "",
+      };
+      filters.value = { ...appliedFilters.value };
+      await loadRecords();
+      statsRefreshKey.value++;
     }
-
-    progress.value = 55;
-    progressText.value = `正在保存 ${result.records.length.toLocaleString()} 条记录到数据库...`;
-    await saveRecords({ records: result.records, replace: true });
-
-    progress.value = 100;
-    progressText.value = "处理完成";
-
-    const info = `成功处理 ${result.records.length.toLocaleString()} 条停车收费记录。`;
-    showInfo(info);
-    await message(info, { title: "处理完成", kind: "info" });
-
-    if (result.errors.length > 0) {
-      showError(result.errors.join("；"));
-    }
-
-    page.value = 1;
-    appliedFilters.value = {
-      plate: "",
-      ownerName: "",
-      vehicleType: "",
-      chargeType: "",
-      releaseMethod: "",
-      paymentMethod: "",
-      entryTimeStart: "",
-      entryTimeEnd: "",
-      exitTimeStart: "",
-      exitTimeEnd: "",
-    };
-    filters.value = { ...appliedFilters.value };
-    await loadRecords();
-    statsRefreshKey.value++;
   } catch (err) {
     const text = `处理失败：${err instanceof Error ? err.message : String(err)}`;
     showError(text);
@@ -214,7 +511,13 @@ function handleError(text: string) {
 }
 
 async function handleClear() {
-  const ok = await confirm("确定要清空数据库中的所有停车记录吗？此操作不可恢复。", {
+  let confirmText = "确定要清空数据库中的所有停车记录吗？此操作不可恢复。";
+  if (activeMenu.value === "monthly") {
+    confirmText = "确定要清空数据库中的所有月租车记录吗？此操作不可恢复。";
+  } else if (activeMenu.value === "free") {
+    confirmText = "确定要清空数据库中的所有免费车记录吗？此操作不可恢复。";
+  }
+  const ok = await confirm(confirmText, {
     title: "请确认",
     kind: "warning",
   });
@@ -222,24 +525,56 @@ async function handleClear() {
   loading.value = true;
   progressText.value = "正在清空数据库...";
   try {
-    await clearRecords();
-    showInfo("数据库已清空。");
-    page.value = 1;
-    appliedFilters.value = {
-      plate: "",
-      ownerName: "",
-      vehicleType: "",
-      chargeType: "",
-      releaseMethod: "",
-      paymentMethod: "",
-      entryTimeStart: "",
-      entryTimeEnd: "",
-      exitTimeStart: "",
-      exitTimeEnd: "",
-    };
-    filters.value = { ...appliedFilters.value };
-    await loadRecords();
-    statsRefreshKey.value++;
+    if (activeMenu.value === "monthly") {
+      await clearMonthlyRentals();
+      showInfo("月租车记录已清空。");
+      monthlyPage.value = 1;
+      appliedMonthlyFilters.value = {
+        plate: "",
+        ownerName: "",
+        vehicleType: "",
+        startDateStart: "",
+        startDateEnd: "",
+        endDateStart: "",
+        endDateEnd: "",
+      };
+      monthlyFilters.value = { ...appliedMonthlyFilters.value };
+      await loadMonthlyRentals();
+    } else if (activeMenu.value === "free") {
+      await clearFreeCars();
+      showInfo("免费车记录已清空。");
+      freeCarPage.value = 1;
+      appliedFreeCarFilters.value = {
+        plate: "",
+        ownerName: "",
+        vehicleType: "",
+        startDateStart: "",
+        startDateEnd: "",
+        endDateStart: "",
+        endDateEnd: "",
+      };
+      freeCarFilters.value = { ...appliedFreeCarFilters.value };
+      await loadFreeCars();
+    } else {
+      await clearRecords();
+      showInfo("数据库已清空。");
+      page.value = 1;
+      appliedFilters.value = {
+        plate: "",
+        ownerName: "",
+        vehicleType: "",
+        chargeType: "",
+        releaseMethod: "",
+        paymentMethod: "",
+        entryTimeStart: "",
+        entryTimeEnd: "",
+        exitTimeStart: "",
+        exitTimeEnd: "",
+      };
+      filters.value = { ...appliedFilters.value };
+      await loadRecords();
+      statsRefreshKey.value++;
+    }
   } catch (err) {
     showError(`清空失败：${err instanceof Error ? err.message : String(err)}`);
   } finally {
@@ -252,11 +587,20 @@ watch(page, () => {
   loadRecords();
 });
 
+watch(monthlyPage, () => {
+  loadMonthlyRentals();
+});
+
+watch(freeCarPage, () => {
+  loadFreeCars();
+});
+
 onMounted(async () => {
   try {
-    await getDbPath();
+    backendInfo.value = await getBackendInfo();
+    dbPath.value = await getDbPath();
     dbReady.value = true;
-    await loadRecords();
+    await Promise.all([loadRecords(), loadMonthlyRentals(), loadFreeCars()]);
   } catch {
     dbReady.value = false;
   }
@@ -272,7 +616,11 @@ onMounted(async () => {
     <header class="bg-slate-900 text-white px-6 py-3 flex items-center justify-between shrink-0">
       <div>
         <h1 class="text-lg font-bold">停车收费记录解析工具</h1>
-        <p class="text-slate-400 text-xs">解析 ZIP 压缩包中的进出场记录表，支持查看与统计</p>
+        <p class="text-slate-400 text-xs">
+          解析 ZIP 压缩包中的进出场记录表，支持查看与统计
+          <span v-if="backendInfo" class="ml-2 text-slate-500">[{{ backendInfo }}]</span>
+        </p>
+        <p v-if="dbPath" class="text-slate-500 text-xs">{{ dbPath }}</p>
       </div>
       <div class="flex items-center gap-3">
         <button
@@ -281,13 +629,6 @@ onMounted(async () => {
           class="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm font-medium transition"
         >
           清空数据库
-        </button>
-        <button
-          @click="selectFile"
-          :disabled="loading"
-          class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg text-sm font-medium transition"
-        >
-          选择 ZIP 文件
         </button>
       </div>
     </header>
@@ -388,9 +729,47 @@ onMounted(async () => {
             :filters="filters"
             :records="records"
             :total="total"
+            :loading="loading"
             @search="handleSearch"
             @reset="handleReset"
             @update:page-size="(v) => { pageSize = v; page = 1; loadRecords(); }"
+            @import-zip="selectFile('records')"
+          />
+          <MonthlyRentals
+            v-else-if="activeMenu === 'monthly'"
+            v-model:page="monthlyPage"
+            :page-size="monthlyPageSize"
+            :filters="monthlyFilters"
+            :records="monthlyRecords"
+            :total="monthlyTotal"
+            :loading="loading"
+            :cleaning="cleaningAddresses"
+            @search="handleMonthlySearch"
+            @reset="handleMonthlyReset"
+            @update:page-size="(v) => { monthlyPageSize = v; monthlyPage = 1; loadMonthlyRentals(); }"
+            @clean-addresses="handleCleanMonthlyRentalAddresses"
+            @import-zip="selectFile('monthly')"
+          />
+          <FreeCars
+            v-else-if="activeMenu === 'free'"
+            v-model:page="freeCarPage"
+            :page-size="freeCarPageSize"
+            :filters="freeCarFilters"
+            :records="freeCarRecords"
+            :total="freeCarTotal"
+            :loading="loading"
+            :cleaning="cleaningAddresses"
+            @search="handleFreeCarSearch"
+            @reset="handleFreeCarReset"
+            @update:page-size="(v) => { freeCarPageSize = v; freeCarPage = 1; loadFreeCars(); }"
+            @clean-addresses="handleCleanFreeCarAddresses"
+            @import-zip="selectFile('free')"
+          />
+          <BuildingCharges
+            v-else-if="activeMenu === 'building'"
+            ref="buildingChargesRef"
+            :loading="buildingChargesLoading"
+            @search="handleBuildingChargesSearch"
           />
           <div v-else-if="activeMenu === 'stats'" class="h-full overflow-auto pr-2 pb-2">
             <StatsPanel :refresh-key="statsRefreshKey" />

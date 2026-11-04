@@ -1,5 +1,8 @@
 use crate::db;
-use crate::db::models::{ParkingRecord, VehicleMonthlyFilter, VehicleMonthlyItem, VehicleRecordsFilter};
+use crate::db::models::{
+    BuildingChargeItem, BuildingChargePlateDetail, BuildingChargesFilter, ParkingRecord,
+    VehicleMonthlyFilter, VehicleMonthlyItem, VehicleRecordsFilter,
+};
 use rust_xlsxwriter::{Format, FormatAlign, Workbook, XlsxError};
 use std::path::PathBuf;
 
@@ -92,9 +95,9 @@ fn write_vehicle_charges_xlsx(
             if i == 0 {
                 worksheet.write_with_format(current, 0, &item.month, &center_format)?;
                 worksheet.write_with_format(current, 1, item.count, &center_format)?;
-                worksheet.write_with_format(current, 2, item.due as f64 / 100.0, &money_format)?;
-                worksheet.write_with_format(current, 3, item.paid as f64 / 100.0, &money_format)?;
-                worksheet.write_with_format(current, 4, item.unpaid as f64 / 100.0, &money_format)?;
+                worksheet.write_with_format(current, 2, item.due as f64, &money_format)?;
+                worksheet.write_with_format(current, 3, item.paid as f64, &money_format)?;
+                worksheet.write_with_format(current, 4, item.unpaid as f64, &money_format)?;
             }
 
             worksheet.write(current, 5, (i + 1) as u32)?;
@@ -102,8 +105,8 @@ fn write_vehicle_charges_xlsx(
             worksheet.write(current, 7, &record.entry_time)?;
             worksheet.write(current, 8, &record.exit_time)?;
             worksheet.write(current, 9, &record.duration)?;
-            worksheet.write_with_format(current, 10, record.due_amount as f64 / 100.0, &money_format)?;
-            worksheet.write_with_format(current, 11, record.paid_amount as f64 / 100.0, &money_format)?;
+            worksheet.write_with_format(current, 10, record.due_amount as f64, &money_format)?;
+            worksheet.write_with_format(current, 11, record.paid_amount as f64, &money_format)?;
             worksheet.write(current, 12, &record.release_method)?;
             worksheet.write(current, 13, &record.source_file)?;
         }
@@ -122,9 +125,9 @@ fn write_vehicle_charges_xlsx(
             // 合并后重新写入实际值到合并单元格的左上角
             worksheet.write_with_format(block_start, 0, &item.month, &center_format)?;
             worksheet.write_with_format(block_start, 1, item.count, &center_format)?;
-            worksheet.write_with_format(block_start, 2, item.due as f64 / 100.0, &money_format)?;
-            worksheet.write_with_format(block_start, 3, item.paid as f64 / 100.0, &money_format)?;
-            worksheet.write_with_format(block_start, 4, item.unpaid as f64 / 100.0, &money_format)?;
+            worksheet.write_with_format(block_start, 2, item.due as f64, &money_format)?;
+            worksheet.write_with_format(block_start, 3, item.paid as f64, &money_format)?;
+            worksheet.write_with_format(block_start, 4, item.unpaid as f64, &money_format)?;
         }
 
         row += count as u32;
@@ -133,9 +136,9 @@ fn write_vehicle_charges_xlsx(
     // 合计行
     worksheet.write_with_format(row, 0, "合计", &header_format)?;
     worksheet.write_with_format(row, 1, total_count, &header_format)?;
-    worksheet.write_with_format(row, 2, total_due as f64 / 100.0, &money_format)?;
-    worksheet.write_with_format(row, 3, total_paid as f64 / 100.0, &money_format)?;
-    worksheet.write_with_format(row, 4, total_unpaid as f64 / 100.0, &money_format)?;
+    worksheet.write_with_format(row, 2, total_due as f64, &money_format)?;
+    worksheet.write_with_format(row, 3, total_paid as f64, &money_format)?;
+    worksheet.write_with_format(row, 4, total_unpaid as f64, &money_format)?;
 
     // 列宽
     worksheet.set_column_width(0, 12.0)?;
@@ -184,6 +187,171 @@ pub async fn export_vehicle_charges_command(
         }
 
         write_vehicle_charges_xlsx(&path, &stats, &data, &filter)
+            .map_err(|e| format!("生成 Excel 失败：{}", e))
+    })
+    .await
+    .map_err(|e| format!("导出任务执行异常：{}", e))?
+}
+
+fn plate_summary(items: &[VehicleMonthlyItem]) -> VehicleMonthlyItem {
+    items.iter().fold(
+        VehicleMonthlyItem {
+            month: String::new(),
+            count: 0,
+            due: 0,
+            paid: 0,
+            unpaid: 0,
+        },
+        |mut acc, item| {
+            acc.count += item.count;
+            acc.due += item.due;
+            acc.paid += item.paid;
+            acc.unpaid += item.unpaid;
+            acc
+        },
+    )
+}
+
+fn write_building_charges_xlsx(
+    path: &PathBuf,
+    details: &[(BuildingChargeItem, Vec<BuildingChargePlateDetail>)],
+) -> Result<(), XlsxError> {
+    let mut workbook = Workbook::new();
+    let worksheet = workbook.add_worksheet();
+
+    let title_format = Format::new()
+        .set_bold()
+        .set_font_size(14)
+        .set_align(FormatAlign::Center)
+        .set_align(FormatAlign::VerticalCenter);
+    let header_format = Format::new()
+        .set_bold()
+        .set_background_color(0xF1F5F9)
+        .set_align(FormatAlign::Center)
+        .set_align(FormatAlign::VerticalCenter);
+    let center_format = Format::new()
+        .set_align(FormatAlign::Center)
+        .set_align(FormatAlign::VerticalCenter);
+    let money_format = Format::new()
+        .set_num_format("¥#,##0.00")
+        .set_align(FormatAlign::Right)
+        .set_align(FormatAlign::VerticalCenter);
+
+    // 标题
+    worksheet.merge_range(0, 0, 0, 5, "楼栋收费统计", &title_format)?;
+
+    // 表头
+    let headers = ["楼栋", "车牌", "记录数", "应收金额", "实收金额", "欠费金额"];
+    for (col, header) in headers.iter().enumerate() {
+        worksheet.write_with_format(1, col as u16, *header, &header_format)?;
+    }
+
+    let mut row = 2u32;
+    let mut total_count = 0i64;
+    let mut total_due = 0i64;
+    let mut total_paid = 0i64;
+    let mut total_unpaid = 0i64;
+
+    for (item, plates) in details {
+        total_count += item.total_count;
+        total_due += item.total_due;
+        total_paid += item.total_paid;
+        total_unpaid += item.total_unpaid;
+
+        let block_start = row;
+        let address = format!("{}-{}-{}", item.building, item.unit, item.room);
+        let row_count = 1 + plates.len() as u32;
+
+        if row_count > 1 {
+            worksheet.merge_range(
+                block_start,
+                0,
+                block_start + row_count - 1,
+                0,
+                &address,
+                &center_format,
+            )?;
+        } else {
+            worksheet.write_with_format(block_start, 0, &address, &center_format)?;
+        }
+
+        worksheet.write(block_start, 1, "合计")?;
+        worksheet.write(block_start, 2, item.total_count)?;
+        worksheet.write_with_format(block_start, 3, item.total_due as f64, &money_format)?;
+        worksheet.write_with_format(block_start, 4, item.total_paid as f64, &money_format)?;
+        worksheet.write_with_format(block_start, 5, item.total_unpaid as f64, &money_format)?;
+
+        row += 1;
+
+        for detail in plates {
+            let summary = plate_summary(&detail.items);
+            worksheet.write(row, 1, &detail.plate)?;
+            worksheet.write(row, 2, summary.count)?;
+            worksheet.write_with_format(row, 3, summary.due as f64, &money_format)?;
+            worksheet.write_with_format(row, 4, summary.paid as f64, &money_format)?;
+            worksheet.write_with_format(row, 5, summary.unpaid as f64, &money_format)?;
+            row += 1;
+        }
+    }
+
+    // 总计行
+    worksheet.write_with_format(row, 0, "总计", &header_format)?;
+    worksheet.write_with_format(row, 1, "", &header_format)?;
+    worksheet.write_with_format(row, 2, total_count, &header_format)?;
+    worksheet.write_with_format(row, 3, total_due as f64, &money_format)?;
+    worksheet.write_with_format(row, 4, total_paid as f64, &money_format)?;
+    worksheet.write_with_format(row, 5, total_unpaid as f64, &money_format)?;
+
+    // 列宽
+    worksheet.set_column_width(0, 16.0)?;
+    worksheet.set_column_width(1, 16.0)?;
+    worksheet.set_column_width(2, 12.0)?;
+    worksheet.set_column_width(3, 14.0)?;
+    worksheet.set_column_width(4, 14.0)?;
+    worksheet.set_column_width(5, 14.0)?;
+
+    worksheet.set_freeze_panes(2, 0)?;
+
+    workbook.save(path)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn export_building_charges_command(
+    file_path: String,
+    filter: BuildingChargesFilter,
+) -> Result<(), String> {
+    let path = PathBuf::from(file_path);
+
+    tokio::task::spawn_blocking(move || {
+        let paginated = db::get_building_charges(BuildingChargesFilter {
+            building: filter.building.clone(),
+            unit: filter.unit.clone(),
+            room: filter.room.clone(),
+            entry_time_start: filter.entry_time_start.clone(),
+            entry_time_end: filter.entry_time_end.clone(),
+            exit_time_start: filter.exit_time_start.clone(),
+            exit_time_end: filter.exit_time_end.clone(),
+            page: Some(1),
+            per_page: Some(100000),
+        })?;
+        let mut details: Vec<(BuildingChargeItem, Vec<BuildingChargePlateDetail>)> = Vec::new();
+        for item in paginated.items {
+            let plates = db::get_building_charge_detail(BuildingChargesFilter {
+                building: Some(item.building.clone()),
+                unit: Some(item.unit.clone()),
+                room: Some(item.room.clone()),
+                entry_time_start: filter.entry_time_start.clone(),
+                entry_time_end: filter.entry_time_end.clone(),
+                exit_time_start: filter.exit_time_start.clone(),
+                exit_time_end: filter.exit_time_end.clone(),
+                page: None,
+                per_page: None,
+            })?;
+            details.push((item, plates));
+        }
+
+        write_building_charges_xlsx(&path, &details)
             .map_err(|e| format!("生成 Excel 失败：{}", e))
     })
     .await

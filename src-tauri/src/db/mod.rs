@@ -105,11 +105,12 @@ pub fn is_db_configured(app_dir: &Path) -> bool {
 }
 
 pub fn init_db(app_dir: PathBuf) -> Result<(), String> {
+    let is_same_dir = APP_DIR.get().map(|d| d == &app_dir).unwrap_or(false);
     if APP_DIR.get().is_none() {
         APP_DIR.set(app_dir.clone()).map_err(|_| "应用目录已初始化".to_string())?;
     }
 
-    let config = load_config();
+    let config = if is_same_dir { load_config() } else { AppConfig::default() };
     let db_path = config.db_path.unwrap_or_else(|| app_dir.join("parkingsyslog.db"));
 
     set_active_db(db_path)
@@ -208,7 +209,7 @@ pub fn save_records(req: SaveRecordsRequest) -> Result<usize, String> {
 
         for r in &req.records {
             stmt.execute(rusqlite::params![
-                r.plate, r.charge_type, r.vehicle_type, r.vehicle_model, r.vehicle_brand, r.vehicle_series,
+                r.plate.trim(), r.charge_type, r.vehicle_type, r.vehicle_model, r.vehicle_brand, r.vehicle_series,
                 r.owner_phone, r.owner_name, r.entry_time, r.entry_lane, r.exit_time, r.exit_lane,
                 r.duration, r.duration_minutes, r.due_amount, r.paid_amount, r.coupon_type, r.coupon_discount,
                 r.charge_discount_type, r.charge_discount_amount, r.payment_method, r.release_method,
@@ -224,7 +225,7 @@ pub fn save_records(req: SaveRecordsRequest) -> Result<usize, String> {
 fn build_where_clause(filter: &ListRecordsFilter) -> String {
     let mut conditions: Vec<String> = vec![];
     if let Some(s) = &filter.plate {
-        conditions.push(format!("plate LIKE '%{}%'", s.replace("'", "''")));
+        conditions.push(format!("TRIM(plate) LIKE '%{}%'", s.replace("'", "''")));
     }
     if let Some(s) = &filter.owner_name {
         conditions.push(format!("owner_name LIKE '%{}%'", s.replace("'", "''")));
@@ -398,6 +399,70 @@ pub fn get_stats() -> Result<StatsResult, String> {
     })
 }
 
+pub fn get_top_unpaid_vehicles(filter: TopUnpaidVehiclesFilter) -> Result<Paginated<TopUnpaidVehicle>, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+
+    let limit = std::cmp::max(filter.limit.unwrap_or(10), 1);
+    let page = std::cmp::max(filter.page, 1);
+    let per_page = std::cmp::max(filter.per_page, 1);
+    let offset = (page - 1) * per_page;
+
+    let total: i64 = conn.query_row(
+        "WITH ranked AS (
+            SELECT plate,
+                   COALESCE(SUM(due_amount - paid_amount), 0) AS unpaid
+            FROM parking_records
+            GROUP BY plate
+            HAVING unpaid > 0
+            ORDER BY unpaid DESC
+            LIMIT ?1
+        ) SELECT COUNT(*) FROM ranked",
+        [limit],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+
+    let sql =
+        "WITH ranked AS (
+            SELECT plate,
+                   COUNT(*) AS cnt,
+                   COALESCE(SUM(due_amount), 0) AS due,
+                   COALESCE(SUM(paid_amount), 0) AS paid,
+                   COALESCE(SUM(due_amount - paid_amount), 0) AS unpaid
+            FROM parking_records
+            GROUP BY plate
+            HAVING unpaid > 0
+            ORDER BY unpaid DESC
+            LIMIT ?1
+        )
+        SELECT plate, cnt, due, paid, unpaid
+        FROM ranked
+        ORDER BY unpaid DESC
+        LIMIT ?2 OFFSET ?3";
+
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let items = stmt
+        .query_map([limit, per_page, offset], |row| {
+            Ok(TopUnpaidVehicle {
+                plate: row.get(0)?,
+                count: row.get(1)?,
+                due: row.get(2)?,
+                paid: row.get(3)?,
+                unpaid: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(Paginated {
+        items,
+        total,
+        page,
+        per_page,
+    })
+}
+
 pub fn export_all_records() -> Result<Vec<ParkingRecord>, String> {
     let db = db();
     let conn = db.lock().map_err(|e| e.to_string())?;
@@ -450,24 +515,34 @@ fn build_vehicle_where_clause(
     exit_time_end: &Option<String>,
     month: Option<&str>,
 ) -> String {
-    let mut conditions: Vec<String> = vec![format!(
-        "plate LIKE '%{}%'",
-        plate.replace("'", "''")
-    )];
+    let mut conditions: Vec<String> = vec![
+        format!("TRIM(plate) LIKE '%{}%'", plate.replace("'", "''")),
+        "exit_time IS NOT NULL AND exit_time != ''".to_string(),
+    ];
     if let Some(s) = entry_time_start {
-        conditions.push(format!("entry_time >= '{}'", s.replace("'", "''")));
+        if !s.is_empty() {
+            conditions.push(format!("entry_time >= '{}'", s.replace("'", "''")));
+        }
     }
     if let Some(s) = entry_time_end {
-        conditions.push(format!("entry_time <= '{}'", s.replace("'", "''")));
+        if !s.is_empty() {
+            conditions.push(format!("entry_time <= '{}'", s.replace("'", "''")));
+        }
     }
     if let Some(s) = exit_time_start {
-        conditions.push(format!("exit_time >= '{}'", s.replace("'", "''")));
+        if !s.is_empty() {
+            conditions.push(format!("exit_time >= '{}'", s.replace("'", "''")));
+        }
     }
     if let Some(s) = exit_time_end {
-        conditions.push(format!("exit_time <= '{}'", s.replace("'", "''")));
+        if !s.is_empty() {
+            conditions.push(format!("exit_time <= '{}'", s.replace("'", "''")));
+        }
     }
     if let Some(m) = month {
-        conditions.push(format!("strftime('%Y-%m', exit_time) = '{}'", m.replace("'", "''")));
+        if !m.is_empty() {
+            conditions.push(format!("strftime('%Y-%m', exit_time) = '{}'", m.replace("'", "''")));
+        }
     }
     format!("WHERE {}", conditions.join(" AND "))
 }
@@ -517,6 +592,533 @@ pub fn get_vehicle_monthly_stats(filter: VehicleMonthlyFilter) -> Result<Vec<Veh
     Ok(items)
 }
 
+fn parse_building_unit_room(address: &str) -> (String, String, String) {
+    let parts: Vec<&str> = address.split('-').collect();
+    match parts.len() {
+        3 => (parts[0].to_string(), parts[1].to_string(), parts[2].to_string()),
+        2 => (parts[0].to_string(), parts[1].to_string(), String::new()),
+        1 => (parts[0].to_string(), String::new(), String::new()),
+        _ => (String::new(), String::new(), String::new()),
+    }
+}
+
+fn map_monthly_rental(row: &rusqlite::Row) -> Result<MonthlyRentalVehicle> {
+    Ok(MonthlyRentalVehicle {
+        id: row.get(0)?,
+        plate: row.get(1)?,
+        parking_space: row.get(2)?,
+        vehicle_type: row.get(3)?,
+        owner_phone: row.get(4)?,
+        owner_name: row.get(5)?,
+        owner_address: row.get(6)?,
+        start_date: row.get(7)?,
+        end_date: row.get(8)?,
+        parking_group: row.get(9)?,
+        parking_space_count: row.get(10)?,
+        source_file: row.get(11)?,
+        building: row.get(12)?,
+        unit: row.get(13)?,
+        room: row.get(14)?,
+    })
+}
+
+pub fn save_monthly_rentals(req: SaveMonthlyRentalsRequest) -> Result<usize, String> {
+    let db = db();
+    let mut conn = db.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    if req.replace {
+        tx.execute("DELETE FROM monthly_rental_vehicles", [])
+            .map_err(|e| e.to_string())?;
+    }
+
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO monthly_rental_vehicles (
+                plate, parking_space, vehicle_type, owner_phone, owner_name, owner_address,
+                start_date, end_date, parking_group, parking_space_count, source_file,
+                building, unit, room
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+            )"
+        ).map_err(|e| e.to_string())?;
+
+        for r in &req.records {
+            let (building, unit, room) = parse_building_unit_room(&r.owner_address);
+            stmt.execute(rusqlite::params![
+                r.plate.trim(), r.parking_space, r.vehicle_type, r.owner_phone, r.owner_name, r.owner_address,
+                r.start_date, r.end_date, r.parking_group, r.parking_space_count, r.source_file,
+                building, unit, room
+            ]).map_err(|e| e.to_string())?;
+        }
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(req.records.len())
+}
+
+fn build_monthly_where_clause(filter: &ListMonthlyRentalsFilter) -> String {
+    let mut conditions: Vec<String> = vec![];
+    if let Some(s) = &filter.plate {
+        conditions.push(format!("TRIM(plate) LIKE '%{}%'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.owner_name {
+        conditions.push(format!("owner_name LIKE '%{}%'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.vehicle_type {
+        conditions.push(format!("vehicle_type LIKE '%{}%'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.start_date_start {
+        conditions.push(format!("start_date >= '{}'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.start_date_end {
+        conditions.push(format!("start_date <= '{}'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.end_date_start {
+        conditions.push(format!("end_date >= '{}'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.end_date_end {
+        conditions.push(format!("end_date <= '{}'", s.replace("'", "''")));
+    }
+    if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    }
+}
+
+pub fn list_monthly_rentals(filter: ListMonthlyRentalsFilter) -> Result<Paginated<MonthlyRentalVehicle>, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+
+    let where_clause = build_monthly_where_clause(&filter);
+
+    let total: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM monthly_rental_vehicles {}", where_clause),
+        [],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+
+    let offset = (filter.page - 1) * filter.per_page;
+    let sql = format!(
+        "SELECT * FROM monthly_rental_vehicles {} ORDER BY id LIMIT {} OFFSET {}",
+        where_clause, filter.per_page, offset
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let items = stmt
+        .query_map([], map_monthly_rental)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(Paginated {
+        items,
+        total,
+        page: filter.page,
+        per_page: filter.per_page,
+    })
+}
+
+pub fn clear_monthly_rentals() -> Result<usize, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let count = conn.execute("DELETE FROM monthly_rental_vehicles", [])
+        .map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+fn map_free_car(row: &rusqlite::Row) -> Result<FreeCar> {
+    Ok(FreeCar {
+        id: row.get(0)?,
+        plate: row.get(1)?,
+        parking_space: row.get(2)?,
+        vehicle_type: row.get(3)?,
+        owner_phone: row.get(4)?,
+        owner_name: row.get(5)?,
+        owner_address: row.get(6)?,
+        start_date: row.get(7)?,
+        end_date: row.get(8)?,
+        parking_group: row.get(9)?,
+        parking_space_count: row.get(10)?,
+        source_file: row.get(11)?,
+        building: row.get(12)?,
+        unit: row.get(13)?,
+        room: row.get(14)?,
+    })
+}
+
+pub fn save_free_cars(req: SaveFreeCarsRequest) -> Result<usize, String> {
+    let db = db();
+    let mut conn = db.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    if req.replace {
+        tx.execute("DELETE FROM free_cars", [])
+            .map_err(|e| e.to_string())?;
+    }
+
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO free_cars (
+                plate, parking_space, vehicle_type, owner_phone, owner_name, owner_address,
+                start_date, end_date, parking_group, parking_space_count, source_file,
+                building, unit, room
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+            )"
+        ).map_err(|e| e.to_string())?;
+
+        for r in &req.records {
+            let (building, unit, room) = parse_building_unit_room(&r.owner_address);
+            stmt.execute(rusqlite::params![
+                r.plate.trim(), r.parking_space, r.vehicle_type, r.owner_phone, r.owner_name, r.owner_address,
+                r.start_date, r.end_date, r.parking_group, r.parking_space_count, r.source_file,
+                building, unit, room
+            ]).map_err(|e| e.to_string())?;
+        }
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(req.records.len())
+}
+
+pub fn list_free_cars(filter: ListFreeCarsFilter) -> Result<Paginated<FreeCar>, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+
+    let where_clause = build_monthly_where_clause(&ListMonthlyRentalsFilter {
+        plate: filter.plate,
+        owner_name: filter.owner_name,
+        vehicle_type: filter.vehicle_type,
+        start_date_start: filter.start_date_start,
+        start_date_end: filter.start_date_end,
+        end_date_start: filter.end_date_start,
+        end_date_end: filter.end_date_end,
+        page: filter.page,
+        per_page: filter.per_page,
+    });
+
+    let total: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM free_cars {}", where_clause),
+        [],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+
+    let offset = (filter.page - 1) * filter.per_page;
+    let sql = format!(
+        "SELECT * FROM free_cars {} ORDER BY id LIMIT {} OFFSET {}",
+        where_clause, filter.per_page, offset
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let items = stmt
+        .query_map([], map_free_car)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(Paginated {
+        items,
+        total,
+        page: filter.page,
+        per_page: filter.per_page,
+    })
+}
+
+pub fn clear_free_cars() -> Result<usize, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let count = conn.execute("DELETE FROM free_cars", [])
+        .map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+fn clean_owner_addresses(table: &str) -> Result<usize, String> {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+
+    static ADDRESS_START: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+-\d+(?:-\d+)?)\s*(.*?)\s*(租户)?$").unwrap());
+    static ADDRESS_END: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(.*?)\s*(\d+-\d+(?:-\d+)?)\s*(租户)?$").unwrap());
+    static DONG_UNIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+)栋(\d+)单元(\d+)$").unwrap());
+    static ADDRESS_SUFFIX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+-\d+(?:-\d+)?)(租户)$").unwrap());
+
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+
+    let select_sql = format!("SELECT id, owner_name, owner_address FROM {}", table);
+    let mut stmt = conn.prepare(&select_sql)
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(stmt);
+
+    let update_sql = format!("UPDATE {} SET owner_name = ?1, owner_address = ?2, building = ?3, unit = ?4, room = ?5 WHERE id = ?6", table);
+    let mut updated = 0;
+    let mut update_stmt = conn.prepare(&update_sql).map_err(|e| e.to_string())?;
+
+    for (id, mut name, mut address) in rows {
+        let original_name = name.clone();
+        let original_address = address.clone();
+
+        // 1. 地址为空时，从车主姓名中提取地址
+        if address.is_empty() {
+            if let Some(caps) = ADDRESS_START.captures(&name) {
+                let extracted_addr = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let remaining = caps.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                let suffix = caps.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
+                address = extracted_addr;
+                name = remaining;
+                if suffix == "租户" && !name.ends_with("租户") {
+                    name = format!("{}租户", name);
+                }
+            } else if let Some(caps) = ADDRESS_END.captures(&name) {
+                let extracted_addr = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let remaining = caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                let suffix = caps.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
+                address = extracted_addr;
+                name = remaining;
+                if suffix == "租户" && !name.ends_with("租户") {
+                    name = format!("{}租户", name);
+                }
+            }
+        }
+
+        // 2. 将 "11栋1单元1001" 转换为 "11-1-1001"
+        if let Some(caps) = DONG_UNIT.captures(&address) {
+            address = format!("{}-{}-{}", &caps[1], &caps[2], &caps[3]);
+        }
+
+        // 3. 将 "7-1-703租户" 拆分，地址保留 "7-1-703"，"租户" 追加到车主姓名
+        if let Some(caps) = ADDRESS_SUFFIX.captures(&address) {
+            address = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+            if !name.ends_with("租户") {
+                name = format!("{}租户", name);
+            }
+        }
+
+        let (building, unit, room) = parse_building_unit_room(&address);
+        if name != original_name || address != original_address || building != "" || unit != "" || room != "" {
+            update_stmt.execute(rusqlite::params![name, address, building, unit, room, id])
+                .map_err(|e| e.to_string())?;
+            updated += 1;
+        }
+    }
+
+    Ok(updated)
+}
+
+pub fn clean_free_car_addresses() -> Result<usize, String> {
+    clean_owner_addresses("free_cars")
+}
+
+pub fn clean_monthly_rental_addresses() -> Result<usize, String> {
+    clean_owner_addresses("monthly_rental_vehicles")
+}
+
+fn build_building_charges_where(filter: &BuildingChargesFilter) -> String {
+    let mut conditions: Vec<String> = vec![];
+
+    if let Some(s) = &filter.building {
+        if !s.is_empty() {
+            conditions.push(format!("building = '{}'", s.replace("'", "''")));
+        }
+    }
+    if let Some(s) = &filter.unit {
+        if !s.is_empty() {
+            conditions.push(format!("unit = '{}'", s.replace("'", "''")));
+        }
+    }
+    if let Some(s) = &filter.room {
+        if !s.is_empty() {
+            conditions.push(format!("room = '{}'", s.replace("'", "''")));
+        }
+    }
+
+    if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    }
+}
+
+fn build_parking_time_conditions(
+    entry_time_start: &Option<String>,
+    entry_time_end: &Option<String>,
+    exit_time_start: &Option<String>,
+    exit_time_end: &Option<String>,
+    alias: &str,
+) -> String {
+    let mut conditions: Vec<String> = vec![];
+    if let Some(s) = entry_time_start {
+        if !s.is_empty() {
+            conditions.push(format!("{}entry_time >= '{}'", alias, s.replace("'", "''")));
+        }
+    }
+    if let Some(s) = entry_time_end {
+        if !s.is_empty() {
+            conditions.push(format!("{}entry_time <= '{}'", alias, s.replace("'", "''")));
+        }
+    }
+    if let Some(s) = exit_time_start {
+        if !s.is_empty() {
+            conditions.push(format!("{}exit_time >= '{}'", alias, s.replace("'", "''")));
+        }
+    }
+    if let Some(s) = exit_time_end {
+        if !s.is_empty() {
+            conditions.push(format!("{}exit_time <= '{}'", alias, s.replace("'", "''")));
+        }
+    }
+    if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("AND {}", conditions.join(" AND "))
+    }
+}
+
+pub fn get_building_charges(filter: BuildingChargesFilter) -> Result<Paginated<BuildingChargeItem>, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+
+    let where_clause = build_building_charges_where(&filter);
+    let time_conditions = build_parking_time_conditions(
+        &filter.entry_time_start,
+        &filter.entry_time_end,
+        &filter.exit_time_start,
+        &filter.exit_time_end,
+        "pr.",
+    );
+
+    let page = std::cmp::max(filter.page.unwrap_or(1), 1);
+    let per_page = std::cmp::max(filter.per_page.unwrap_or(20), 1);
+    let offset = (page - 1) * per_page;
+
+    let count_sql = format!(
+        r#"
+        WITH matched_vehicles AS (
+            SELECT building, unit, room, TRIM(plate) AS plate FROM monthly_rental_vehicles {}
+            UNION
+            SELECT building, unit, room, TRIM(plate) AS plate FROM free_cars {}
+        )
+        SELECT COUNT(*) FROM (
+            SELECT mv.building, mv.unit, mv.room
+            FROM matched_vehicles mv
+            LEFT JOIN parking_records pr ON TRIM(pr.plate) = mv.plate {}
+            GROUP BY mv.building, mv.unit, mv.room
+        )
+        "#,
+        where_clause, where_clause, time_conditions
+    );
+    let total: i64 = conn.query_row(&count_sql, [], |row| row.get(0)).map_err(|e| e.to_string())?;
+
+    let sql = format!(
+        r#"
+        WITH matched_vehicles AS (
+            SELECT building, unit, room, TRIM(plate) AS plate FROM monthly_rental_vehicles {}
+            UNION
+            SELECT building, unit, room, TRIM(plate) AS plate FROM free_cars {}
+        )
+        SELECT
+            mv.building,
+            mv.unit,
+            mv.room,
+            COUNT(DISTINCT mv.plate) AS plate_count,
+            COUNT(pr.id) AS total_count,
+            COALESCE(SUM(pr.due_amount), 0) AS total_due,
+            COALESCE(SUM(pr.paid_amount), 0) AS total_paid,
+            COALESCE(SUM(pr.due_amount - pr.paid_amount), 0) AS total_unpaid
+        FROM matched_vehicles mv
+        LEFT JOIN parking_records pr ON TRIM(pr.plate) = mv.plate {}
+        GROUP BY mv.building, mv.unit, mv.room
+        ORDER BY mv.building, mv.unit, mv.room
+        LIMIT {} OFFSET {}
+        "#,
+        where_clause, where_clause, time_conditions, per_page, offset
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let items = stmt
+        .query_map([], |row| {
+            Ok(BuildingChargeItem {
+                building: row.get(0)?,
+                unit: row.get(1)?,
+                room: row.get(2)?,
+                plate_count: row.get(3)?,
+                total_count: row.get(4)?,
+                total_due: row.get(5)?,
+                total_paid: row.get(6)?,
+                total_unpaid: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(Paginated {
+        items,
+        total,
+        page,
+        per_page,
+    })
+}
+
+pub fn get_building_charge_detail(filter: BuildingChargesFilter) -> Result<Vec<BuildingChargePlateDetail>, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+
+    let where_clause = build_building_charges_where(&filter);
+
+    let sql = format!(
+        r#"
+        SELECT DISTINCT TRIM(plate) AS plate FROM (
+            SELECT plate FROM monthly_rental_vehicles {}
+            UNION
+            SELECT plate FROM free_cars {}
+        )
+        ORDER BY plate
+        "#,
+        where_clause, where_clause
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let plates: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(stmt);
+    drop(conn);
+
+    let mut details = Vec::new();
+    for plate in plates {
+        let plate = plate.trim().to_string();
+        match get_vehicle_monthly_stats(VehicleMonthlyFilter {
+            plate: plate.clone(),
+            entry_time_start: filter.entry_time_start.clone(),
+            entry_time_end: filter.entry_time_end.clone(),
+            exit_time_start: filter.exit_time_start.clone(),
+            exit_time_end: filter.exit_time_end.clone(),
+        }) {
+            Ok(items) => {
+                if !items.is_empty() {
+                    details.push(BuildingChargePlateDetail { plate, items });
+                }
+            }
+            Err(e) => {
+                eprintln!("get_building_charge_detail: 统计车牌 {} 失败: {}", plate, e);
+            }
+        }
+    }
+
+    Ok(details)
+}
+
 pub fn list_vehicle_records(filter: VehicleRecordsFilter) -> Result<Paginated<ParkingRecord>, String> {
     let db = db();
     let conn = db.lock().map_err(|e| e.to_string())?;
@@ -560,9 +1162,13 @@ pub fn list_vehicle_records(filter: VehicleRecordsFilter) -> Result<Paginated<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static DB_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_db_flow() {
+        let _lock = DB_TEST_LOCK.lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
         init_db(temp.path().to_path_buf()).unwrap();
 
@@ -601,7 +1207,16 @@ mod tests {
         assert_eq!(saved, 1);
 
         let result = list_records(ListRecordsFilter {
-            search: None,
+            plate: None,
+            owner_name: None,
+            vehicle_type: None,
+            charge_type: None,
+            release_method: None,
+            payment_method: None,
+            entry_time_start: None,
+            entry_time_end: None,
+            exit_time_start: None,
+            exit_time_end: None,
             page: 1,
             per_page: 10,
         })
@@ -614,5 +1229,361 @@ mod tests {
         assert_eq!(stats.summary.total_count, 1);
         assert_eq!(stats.summary.total_due, 10);
         assert_eq!(stats.summary.total_paid, 10);
+    }
+
+    #[test]
+    fn test_clean_free_car_addresses() {
+        let _lock = DB_TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        init_db(temp.path().to_path_buf()).unwrap();
+
+        // 清空已有免费车记录，确保测试不受其他测试数据影响
+        clear_free_cars().unwrap();
+
+        let records = vec![
+            FreeCar {
+                id: 0,
+                plate: "川A00001".to_string(),
+                parking_space: "".to_string(),
+                vehicle_type: "免费车".to_string(),
+                owner_phone: "13800000000".to_string(),
+                owner_name: "10-2-1103况志航".to_string(),
+                owner_address: "".to_string(),
+                start_date: "2026-01-01".to_string(),
+                end_date: "2026-12-31".to_string(),
+                parking_group: "".to_string(),
+                parking_space_count: 0,
+                source_file: "test.xlsx".to_string(),
+                building: "".to_string(),
+                unit: "".to_string(),
+                room: "".to_string(),
+            },
+            FreeCar {
+                id: 0,
+                plate: "川A00002".to_string(),
+                parking_space: "".to_string(),
+                vehicle_type: "免费车".to_string(),
+                owner_phone: "13800000000".to_string(),
+                owner_name: "曾兵7-1-202".to_string(),
+                owner_address: "".to_string(),
+                start_date: "2026-01-01".to_string(),
+                end_date: "2026-12-31".to_string(),
+                parking_group: "".to_string(),
+                parking_space_count: 0,
+                source_file: "test.xlsx".to_string(),
+                building: "".to_string(),
+                unit: "".to_string(),
+                room: "".to_string(),
+            },
+            FreeCar {
+                id: 0,
+                plate: "川A00003".to_string(),
+                parking_space: "".to_string(),
+                vehicle_type: "免费车".to_string(),
+                owner_phone: "13800000000".to_string(),
+                owner_name: "张三".to_string(),
+                owner_address: "11栋1单元1001".to_string(),
+                start_date: "2026-01-01".to_string(),
+                end_date: "2026-12-31".to_string(),
+                parking_group: "".to_string(),
+                parking_space_count: 0,
+                source_file: "test.xlsx".to_string(),
+                building: "".to_string(),
+                unit: "".to_string(),
+                room: "".to_string(),
+            },
+            FreeCar {
+                id: 0,
+                plate: "川A00004".to_string(),
+                parking_space: "".to_string(),
+                vehicle_type: "免费车".to_string(),
+                owner_phone: "13800000000".to_string(),
+                owner_name: "李四".to_string(),
+                owner_address: "7-1-703租户".to_string(),
+                start_date: "2026-01-01".to_string(),
+                end_date: "2026-12-31".to_string(),
+                parking_group: "".to_string(),
+                parking_space_count: 0,
+                source_file: "test.xlsx".to_string(),
+                building: "".to_string(),
+                unit: "".to_string(),
+                room: "".to_string(),
+            },
+            FreeCar {
+                id: 0,
+                plate: "川A00005".to_string(),
+                parking_space: "".to_string(),
+                vehicle_type: "免费车".to_string(),
+                owner_phone: "13800000000".to_string(),
+                owner_name: "朱致恒1-1-1801租户".to_string(),
+                owner_address: "".to_string(),
+                start_date: "2026-01-01".to_string(),
+                end_date: "2026-12-31".to_string(),
+                parking_group: "".to_string(),
+                parking_space_count: 0,
+                source_file: "test.xlsx".to_string(),
+                building: "".to_string(),
+                unit: "".to_string(),
+                room: "".to_string(),
+            },
+        ];
+
+        save_free_cars(SaveFreeCarsRequest { records, replace: true }).unwrap();
+        let updated = clean_free_car_addresses().unwrap();
+        assert_eq!(updated, 5);
+
+        let result = list_free_cars(ListFreeCarsFilter {
+            plate: None,
+            owner_name: None,
+            vehicle_type: None,
+            start_date_start: None,
+            start_date_end: None,
+            end_date_start: None,
+            end_date_end: None,
+            page: 1,
+            per_page: 100,
+        }).unwrap();
+
+        let by_plate: std::collections::HashMap<String, FreeCar> = result
+            .items
+            .into_iter()
+            .map(|r| (r.plate.clone(), r))
+            .collect();
+
+        let r1 = by_plate.get("川A00001").unwrap();
+        assert_eq!(r1.owner_address, "10-2-1103");
+        assert_eq!(r1.owner_name, "况志航");
+
+        let r2 = by_plate.get("川A00002").unwrap();
+        assert_eq!(r2.owner_address, "7-1-202");
+        assert_eq!(r2.owner_name, "曾兵");
+
+        let r3 = by_plate.get("川A00003").unwrap();
+        assert_eq!(r3.owner_address, "11-1-1001");
+        assert_eq!(r3.owner_name, "张三");
+
+        let r4 = by_plate.get("川A00004").unwrap();
+        assert_eq!(r4.owner_address, "7-1-703");
+        assert_eq!(r4.owner_name, "李四租户");
+
+        let r5 = by_plate.get("川A00005").unwrap();
+        assert_eq!(r5.owner_address, "1-1-1801");
+        assert_eq!(r5.owner_name, "朱致恒租户");
+    }
+
+    #[test]
+    fn test_clean_monthly_rental_addresses() {
+        let _lock = DB_TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        init_db(temp.path().to_path_buf()).unwrap();
+
+        clear_monthly_rentals().unwrap();
+
+        let records = vec![
+            MonthlyRentalVehicle {
+                id: 0,
+                plate: "川B00001".to_string(),
+                parking_space: "".to_string(),
+                vehicle_type: "月租车".to_string(),
+                owner_phone: "13800000000".to_string(),
+                owner_name: "10-2-1103况志航".to_string(),
+                owner_address: "".to_string(),
+                start_date: "2026-01-01".to_string(),
+                end_date: "2026-12-31".to_string(),
+                parking_group: "".to_string(),
+                parking_space_count: 0,
+                source_file: "test.xlsx".to_string(),
+                building: "".to_string(),
+                unit: "".to_string(),
+                room: "".to_string(),
+            },
+            MonthlyRentalVehicle {
+                id: 0,
+                plate: "川B00002".to_string(),
+                parking_space: "".to_string(),
+                vehicle_type: "月租车".to_string(),
+                owner_phone: "13800000000".to_string(),
+                owner_name: "张三".to_string(),
+                owner_address: "11栋1单元1001".to_string(),
+                start_date: "2026-01-01".to_string(),
+                end_date: "2026-12-31".to_string(),
+                parking_group: "".to_string(),
+                parking_space_count: 0,
+                source_file: "test.xlsx".to_string(),
+                building: "".to_string(),
+                unit: "".to_string(),
+                room: "".to_string(),
+            },
+        ];
+
+        save_monthly_rentals(SaveMonthlyRentalsRequest { records, replace: true }).unwrap();
+        let updated = clean_monthly_rental_addresses().unwrap();
+        assert_eq!(updated, 2);
+
+        let result = list_monthly_rentals(ListMonthlyRentalsFilter {
+            plate: None,
+            owner_name: None,
+            vehicle_type: None,
+            start_date_start: None,
+            start_date_end: None,
+            end_date_start: None,
+            end_date_end: None,
+            page: 1,
+            per_page: 100,
+        }).unwrap();
+
+        let by_plate: std::collections::HashMap<String, MonthlyRentalVehicle> = result
+            .items
+            .into_iter()
+            .map(|r| (r.plate.clone(), r))
+            .collect();
+
+        let r1 = by_plate.get("川B00001").unwrap();
+        assert_eq!(r1.owner_address, "10-2-1103");
+        assert_eq!(r1.owner_name, "况志航");
+
+        let r2 = by_plate.get("川B00002").unwrap();
+        assert_eq!(r2.owner_address, "11-1-1001");
+        assert_eq!(r2.owner_name, "张三");
+    }
+
+    #[test]
+    fn test_building_charges() {
+        let _lock = DB_TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        init_db(temp.path().to_path_buf()).unwrap();
+
+        clear_free_cars().unwrap();
+        clear_monthly_rentals().unwrap();
+
+        save_free_cars(SaveFreeCarsRequest {
+            records: vec![FreeCar {
+                id: 0,
+                plate: "川C00001".to_string(),
+                parking_space: "".to_string(),
+                vehicle_type: "免费车".to_string(),
+                owner_phone: "13800000000".to_string(),
+                owner_name: "业主".to_string(),
+                owner_address: "10-2-1103".to_string(),
+                start_date: "2026-01-01".to_string(),
+                end_date: "2026-12-31".to_string(),
+                parking_group: "".to_string(),
+                parking_space_count: 0,
+                source_file: "test.xlsx".to_string(),
+                building: "".to_string(),
+                unit: "".to_string(),
+                room: "".to_string(),
+            }],
+            replace: true,
+        }).unwrap();
+
+        save_records(SaveRecordsRequest {
+            records: vec![
+                ParkingRecord {
+                    id: 0,
+                    plate: "川C00001".to_string(),
+                    charge_type: "小型车".to_string(),
+                    vehicle_type: "临时车".to_string(),
+                    vehicle_model: "".to_string(),
+                    vehicle_brand: "".to_string(),
+                    vehicle_series: "".to_string(),
+                    owner_phone: "".to_string(),
+                    owner_name: "".to_string(),
+                    entry_time: "2026-09-01 08:00:00".to_string(),
+                    entry_lane: "".to_string(),
+                    exit_time: "2026-09-01 10:00:00".to_string(),
+                    exit_lane: "".to_string(),
+                    duration: "02:00:00".to_string(),
+                    duration_minutes: 120.0,
+                    due_amount: 100,
+                    paid_amount: 80,
+                    coupon_type: "".to_string(),
+                    coupon_discount: 0,
+                    charge_discount_type: "".to_string(),
+                    charge_discount_amount: 0,
+                    payment_method: "".to_string(),
+                    release_method: "".to_string(),
+                    operator: "".to_string(),
+                    remark: "".to_string(),
+                    source_file: "test.xlsx".to_string(),
+                },
+                ParkingRecord {
+                    id: 0,
+                    plate: "川C00001".to_string(),
+                    charge_type: "小型车".to_string(),
+                    vehicle_type: "临时车".to_string(),
+                    vehicle_model: "".to_string(),
+                    vehicle_brand: "".to_string(),
+                    vehicle_series: "".to_string(),
+                    owner_phone: "".to_string(),
+                    owner_name: "".to_string(),
+                    entry_time: "2026-09-02 08:00:00".to_string(),
+                    entry_lane: "".to_string(),
+                    exit_time: "".to_string(),
+                    exit_lane: "".to_string(),
+                    duration: "".to_string(),
+                    duration_minutes: 0.0,
+                    due_amount: 50,
+                    paid_amount: 0,
+                    coupon_type: "".to_string(),
+                    coupon_discount: 0,
+                    charge_discount_type: "".to_string(),
+                    charge_discount_amount: 0,
+                    payment_method: "".to_string(),
+                    release_method: "".to_string(),
+                    operator: "".to_string(),
+                    remark: "".to_string(),
+                    source_file: "test.xlsx".to_string(),
+                },
+            ],
+            replace: true,
+        }).unwrap();
+
+        clean_free_car_addresses().unwrap();
+
+        let result = get_building_charges(BuildingChargesFilter {
+            building: Some("10".to_string()),
+            unit: Some("2".to_string()),
+            room: None,
+            entry_time_start: None,
+            entry_time_end: None,
+            exit_time_start: None,
+            exit_time_end: None,
+            page: None,
+            per_page: None,
+        }).unwrap();
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.total, 1);
+        assert_eq!(result.page, 1);
+        assert_eq!(result.items[0].building, "10");
+        assert_eq!(result.items[0].unit, "2");
+        assert_eq!(result.items[0].room, "1103");
+        assert_eq!(result.items[0].plate_count, 1);
+        assert_eq!(result.items[0].total_count, 2);
+        assert_eq!(result.items[0].total_due, 150);
+        assert_eq!(result.items[0].total_paid, 80);
+        assert_eq!(result.items[0].total_unpaid, 70);
+
+        let detail = get_building_charge_detail(BuildingChargesFilter {
+            building: Some("10".to_string()),
+            unit: Some("2".to_string()),
+            room: Some("1103".to_string()),
+            entry_time_start: None,
+            entry_time_end: None,
+            exit_time_start: None,
+            exit_time_end: None,
+            page: None,
+            per_page: None,
+        }).unwrap();
+
+        assert_eq!(detail.len(), 1);
+        assert_eq!(detail[0].plate, "川C00001");
+        assert_eq!(detail[0].items.len(), 1);
+        assert_eq!(detail[0].items[0].month, "2026-09");
+        assert_eq!(detail[0].items[0].count, 1);
+        assert_eq!(detail[0].items[0].due, 100);
+        assert_eq!(detail[0].items[0].paid, 80);
+        assert_eq!(detail[0].items[0].unpaid, 20);
     }
 }

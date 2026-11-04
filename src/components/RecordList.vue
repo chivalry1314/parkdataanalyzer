@@ -8,6 +8,7 @@ const props = defineProps<{
   page: number;
   pageSize: number;
   filters: RecordFilters;
+  loading?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -15,6 +16,7 @@ const emit = defineEmits<{
   (e: "update:pageSize", value: number): void;
   (e: "search", value: RecordFilters): void;
   (e: "reset"): void;
+  (e: "import-zip"): void;
 }>();
 
 const expanded = ref(false);
@@ -71,6 +73,13 @@ const startIndex = () => (props.page - 1) * props.pageSize + 1;
           <p class="text-sm text-slate-500">共 {{ total.toLocaleString() }} 条记录</p>
         </div>
         <div class="flex items-center gap-3">
+          <button
+            @click="$emit('import-zip')"
+            :disabled="loading"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition"
+          >
+            导入 ZIP
+          </button>
           <button
             @click="expanded = !expanded"
             class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition"

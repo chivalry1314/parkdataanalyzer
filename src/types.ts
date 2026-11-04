@@ -53,6 +53,100 @@ export interface VehicleMonthlyItem {
   unpaid: number;
 }
 
+export interface MonthlyRentalVehicle {
+  id: number;
+  plate: string;
+  parkingSpace: string;
+  vehicleType: string;
+  ownerPhone: string;
+  ownerName: string;
+  ownerAddress: string;
+  startDate: string;
+  endDate: string;
+  parkingGroup: string;
+  parkingSpaceCount: number;
+  sourceFile: string;
+  building: string;
+  unit: string;
+  room: string;
+}
+
+export interface MonthlyRentalParseResult {
+  records: MonthlyRentalVehicle[];
+  errors: string[];
+}
+
+export interface MonthlyRentalFilters {
+  plate: string;
+  ownerName: string;
+  vehicleType: string;
+  startDateStart: string;
+  startDateEnd: string;
+  endDateStart: string;
+  endDateEnd: string;
+}
+
+export interface FreeCar {
+  id: number;
+  plate: string;
+  parkingSpace: string;
+  vehicleType: string;
+  ownerPhone: string;
+  ownerName: string;
+  ownerAddress: string;
+  startDate: string;
+  endDate: string;
+  parkingGroup: string;
+  parkingSpaceCount: number;
+  sourceFile: string;
+  building: string;
+  unit: string;
+  room: string;
+}
+
+export interface FreeCarParseResult {
+  records: FreeCar[];
+  errors: string[];
+}
+
+export interface FreeCarFilters {
+  plate: string;
+  ownerName: string;
+  vehicleType: string;
+  startDateStart: string;
+  startDateEnd: string;
+  endDateStart: string;
+  endDateEnd: string;
+}
+
+export interface BuildingChargesFilters {
+  building: string;
+  unit: string;
+  room: string;
+  entryTimeStart: string;
+  entryTimeEnd: string;
+  exitTimeStart: string;
+  exitTimeEnd: string;
+  page?: number;
+  perPage?: number;
+}
+
+export interface BuildingChargeItem {
+  building: string;
+  unit: string;
+  room: string;
+  plateCount: number;
+  totalCount: number;
+  totalDue: number;
+  totalPaid: number;
+  totalUnpaid: number;
+}
+
+export interface BuildingChargePlateDetail {
+  plate: string;
+  items: VehicleMonthlyItem[];
+}
+
 export interface Paginated<T> {
   items: T[];
   total: number;
@@ -82,6 +176,20 @@ export interface TimeSeriesItem {
   count: number;
   due: number;
   paid: number;
+}
+
+export interface TopUnpaidVehicle {
+  plate: string;
+  count: number;
+  due: number;
+  paid: number;
+  unpaid: number;
+}
+
+export interface TopUnpaidVehiclesFilter {
+  limit?: number;
+  page: number;
+  perPage: number;
 }
 
 export interface StatsResult {

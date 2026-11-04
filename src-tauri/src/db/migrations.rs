@@ -47,4 +47,73 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_parking_records_exit_time_month ON parking_records(strftime('%Y-%m', exit_time));
         "#,
     ),
+    (
+        "003_add_monthly_rental_vehicles",
+        r#"
+        CREATE TABLE IF NOT EXISTS monthly_rental_vehicles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plate TEXT NOT NULL,
+            parking_space TEXT NOT NULL DEFAULT '',
+            vehicle_type TEXT NOT NULL DEFAULT '',
+            owner_phone TEXT NOT NULL DEFAULT '',
+            owner_name TEXT NOT NULL DEFAULT '',
+            owner_address TEXT NOT NULL DEFAULT '',
+            start_date TEXT NOT NULL DEFAULT '',
+            end_date TEXT NOT NULL DEFAULT '',
+            parking_group TEXT NOT NULL DEFAULT '',
+            parking_space_count INTEGER NOT NULL DEFAULT 0,
+            source_file TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_monthly_rental_plate ON monthly_rental_vehicles(plate);
+        CREATE INDEX IF NOT EXISTS idx_monthly_rental_vehicle_type ON monthly_rental_vehicles(vehicle_type);
+        CREATE INDEX IF NOT EXISTS idx_monthly_rental_start_date ON monthly_rental_vehicles(start_date);
+        CREATE INDEX IF NOT EXISTS idx_monthly_rental_end_date ON monthly_rental_vehicles(end_date);
+        "#,
+    ),
+    (
+        "004_add_free_cars",
+        r#"
+        CREATE TABLE IF NOT EXISTS free_cars (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plate TEXT NOT NULL,
+            parking_space TEXT NOT NULL DEFAULT '',
+            vehicle_type TEXT NOT NULL DEFAULT '',
+            owner_phone TEXT NOT NULL DEFAULT '',
+            owner_name TEXT NOT NULL DEFAULT '',
+            owner_address TEXT NOT NULL DEFAULT '',
+            start_date TEXT NOT NULL DEFAULT '',
+            end_date TEXT NOT NULL DEFAULT '',
+            parking_group TEXT NOT NULL DEFAULT '',
+            parking_space_count INTEGER NOT NULL DEFAULT 0,
+            source_file TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_free_cars_plate ON free_cars(plate);
+        CREATE INDEX IF NOT EXISTS idx_free_cars_vehicle_type ON free_cars(vehicle_type);
+        CREATE INDEX IF NOT EXISTS idx_free_cars_start_date ON free_cars(start_date);
+        CREATE INDEX IF NOT EXISTS idx_free_cars_end_date ON free_cars(end_date);
+        "#,
+    ),
+    (
+        "005_add_building_unit_room",
+        r#"
+        ALTER TABLE monthly_rental_vehicles ADD COLUMN building TEXT NOT NULL DEFAULT '';
+        ALTER TABLE monthly_rental_vehicles ADD COLUMN unit TEXT NOT NULL DEFAULT '';
+        ALTER TABLE monthly_rental_vehicles ADD COLUMN room TEXT NOT NULL DEFAULT '';
+
+        ALTER TABLE free_cars ADD COLUMN building TEXT NOT NULL DEFAULT '';
+        ALTER TABLE free_cars ADD COLUMN unit TEXT NOT NULL DEFAULT '';
+        ALTER TABLE free_cars ADD COLUMN room TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX IF NOT EXISTS idx_monthly_rental_building ON monthly_rental_vehicles(building);
+        CREATE INDEX IF NOT EXISTS idx_monthly_rental_unit ON monthly_rental_vehicles(unit);
+        CREATE INDEX IF NOT EXISTS idx_monthly_rental_room ON monthly_rental_vehicles(room);
+        CREATE INDEX IF NOT EXISTS idx_free_cars_building ON free_cars(building);
+        CREATE INDEX IF NOT EXISTS idx_free_cars_unit ON free_cars(unit);
+        CREATE INDEX IF NOT EXISTS idx_free_cars_room ON free_cars(room);
+        "#,
+    ),
 ];

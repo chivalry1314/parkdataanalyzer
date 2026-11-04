@@ -22,6 +22,11 @@ pub fn get_stats_command() -> Result<StatsResult, String> {
 }
 
 #[tauri::command]
+pub fn get_top_unpaid_vehicles_command(filter: TopUnpaidVehiclesFilter) -> Result<Paginated<TopUnpaidVehicle>, String> {
+    db::get_top_unpaid_vehicles(filter)
+}
+
+#[tauri::command]
 pub fn export_all_records_command() -> Result<Vec<ParkingRecord>, String> {
     db::export_all_records()
 }
@@ -39,6 +44,56 @@ pub fn get_vehicle_monthly_stats_command(filter: VehicleMonthlyFilter) -> Result
 #[tauri::command]
 pub fn list_vehicle_records_command(filter: VehicleRecordsFilter) -> Result<Paginated<ParkingRecord>, String> {
     db::list_vehicle_records(filter)
+}
+
+#[tauri::command]
+pub fn save_monthly_rentals_command(req: SaveMonthlyRentalsRequest) -> Result<usize, String> {
+    db::save_monthly_rentals(req)
+}
+
+#[tauri::command]
+pub fn list_monthly_rentals_command(filter: ListMonthlyRentalsFilter) -> Result<Paginated<MonthlyRentalVehicle>, String> {
+    db::list_monthly_rentals(filter)
+}
+
+#[tauri::command]
+pub fn clear_monthly_rentals_command() -> Result<usize, String> {
+    db::clear_monthly_rentals()
+}
+
+#[tauri::command]
+pub fn save_free_cars_command(req: SaveFreeCarsRequest) -> Result<usize, String> {
+    db::save_free_cars(req)
+}
+
+#[tauri::command]
+pub fn list_free_cars_command(filter: ListFreeCarsFilter) -> Result<Paginated<FreeCar>, String> {
+    db::list_free_cars(filter)
+}
+
+#[tauri::command]
+pub fn clear_free_cars_command() -> Result<usize, String> {
+    db::clear_free_cars()
+}
+
+#[tauri::command]
+pub fn clean_free_car_addresses_command() -> Result<usize, String> {
+    db::clean_free_car_addresses()
+}
+
+#[tauri::command]
+pub fn clean_monthly_rental_addresses_command() -> Result<usize, String> {
+    db::clean_monthly_rental_addresses()
+}
+
+#[tauri::command]
+pub fn get_building_charges_command(filter: BuildingChargesFilter) -> Result<Paginated<BuildingChargeItem>, String> {
+    db::get_building_charges(filter)
+}
+
+#[tauri::command]
+pub fn get_building_charge_detail_command(filter: BuildingChargesFilter) -> Result<Vec<BuildingChargePlateDetail>, String> {
+    db::get_building_charge_detail(filter)
 }
 
 #[tauri::command]

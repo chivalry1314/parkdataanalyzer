@@ -142,6 +142,161 @@ pub struct VehicleRecordsFilter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonthlyRentalVehicle {
+    pub id: i64,
+    #[serde(rename = "plate")]
+    pub plate: String,
+    #[serde(rename = "parkingSpace")]
+    pub parking_space: String,
+    #[serde(rename = "vehicleType")]
+    pub vehicle_type: String,
+    #[serde(rename = "ownerPhone")]
+    pub owner_phone: String,
+    #[serde(rename = "ownerName")]
+    pub owner_name: String,
+    #[serde(rename = "ownerAddress")]
+    pub owner_address: String,
+    #[serde(rename = "startDate")]
+    pub start_date: String,
+    #[serde(rename = "endDate")]
+    pub end_date: String,
+    #[serde(rename = "parkingGroup")]
+    pub parking_group: String,
+    #[serde(rename = "parkingSpaceCount")]
+    pub parking_space_count: i64,
+    #[serde(rename = "sourceFile")]
+    pub source_file: String,
+    pub building: String,
+    pub unit: String,
+    pub room: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveMonthlyRentalsRequest {
+    pub records: Vec<MonthlyRentalVehicle>,
+    pub replace: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListMonthlyRentalsFilter {
+    pub plate: Option<String>,
+    pub owner_name: Option<String>,
+    pub vehicle_type: Option<String>,
+    pub start_date_start: Option<String>,
+    pub start_date_end: Option<String>,
+    pub end_date_start: Option<String>,
+    pub end_date_end: Option<String>,
+    pub page: i64,
+    pub per_page: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreeCar {
+    pub id: i64,
+    #[serde(rename = "plate")]
+    pub plate: String,
+    #[serde(rename = "parkingSpace")]
+    pub parking_space: String,
+    #[serde(rename = "vehicleType")]
+    pub vehicle_type: String,
+    #[serde(rename = "ownerPhone")]
+    pub owner_phone: String,
+    #[serde(rename = "ownerName")]
+    pub owner_name: String,
+    #[serde(rename = "ownerAddress")]
+    pub owner_address: String,
+    #[serde(rename = "startDate")]
+    pub start_date: String,
+    #[serde(rename = "endDate")]
+    pub end_date: String,
+    #[serde(rename = "parkingGroup")]
+    pub parking_group: String,
+    #[serde(rename = "parkingSpaceCount")]
+    pub parking_space_count: i64,
+    #[serde(rename = "sourceFile")]
+    pub source_file: String,
+    pub building: String,
+    pub unit: String,
+    pub room: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveFreeCarsRequest {
+    pub records: Vec<FreeCar>,
+    pub replace: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListFreeCarsFilter {
+    pub plate: Option<String>,
+    pub owner_name: Option<String>,
+    pub vehicle_type: Option<String>,
+    pub start_date_start: Option<String>,
+    pub start_date_end: Option<String>,
+    pub end_date_start: Option<String>,
+    pub end_date_end: Option<String>,
+    pub page: i64,
+    pub per_page: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildingChargeItem {
+    #[serde(rename = "building")]
+    pub building: String,
+    #[serde(rename = "unit")]
+    pub unit: String,
+    #[serde(rename = "room")]
+    pub room: String,
+    #[serde(rename = "plateCount")]
+    pub plate_count: i64,
+    #[serde(rename = "totalCount")]
+    pub total_count: i64,
+    #[serde(rename = "totalDue")]
+    pub total_due: i64,
+    #[serde(rename = "totalPaid")]
+    pub total_paid: i64,
+    #[serde(rename = "totalUnpaid")]
+    pub total_unpaid: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildingChargePlateDetail {
+    #[serde(rename = "plate")]
+    pub plate: String,
+    #[serde(rename = "items")]
+    pub items: Vec<VehicleMonthlyItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BuildingChargesFilter {
+    pub building: Option<String>,
+    pub unit: Option<String>,
+    pub room: Option<String>,
+    pub entry_time_start: Option<String>,
+    pub entry_time_end: Option<String>,
+    pub exit_time_start: Option<String>,
+    pub exit_time_end: Option<String>,
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopUnpaidVehicle {
+    pub plate: String,
+    pub count: i64,
+    pub due: i64,
+    pub paid: i64,
+    pub unpaid: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TopUnpaidVehiclesFilter {
+    pub limit: Option<i64>,
+    pub page: i64,
+    pub per_page: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsResult {
     pub summary: StatsSummary,
     #[serde(rename = "vehicleTypeDistribution")]
