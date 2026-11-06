@@ -116,6 +116,32 @@ pub fn init_db(app_dir: PathBuf) -> Result<(), String> {
     set_active_db(db_path)
 }
 
+pub fn get_setting(key: &str) -> Result<Option<String>, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let value: Result<String, _> = conn.query_row(
+        "SELECT value FROM app_settings WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    );
+    match value {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+pub fn set_setting(key: &str, value: &str) -> Result<(), String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn db() -> Arc<Mutex<Connection>> {
     DB.lock()
         .expect("DB mutex poisoned")
@@ -875,6 +901,134 @@ pub fn update_free_car(record: FreeCar) -> Result<usize, String> {
             building, unit, room, record.id
         ]
     ).map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+fn map_monthly_card_ledger(row: &rusqlite::Row) -> Result<MonthlyCardLedger> {
+    Ok(MonthlyCardLedger {
+        id: row.get(0)?,
+        seq: row.get(1)?,
+        process_date: row.get(2)?,
+        room_number: row.get(3)?,
+        owner_name: row.get(4)?,
+        owner_phone: row.get(5)?,
+        plate: row.get(6)?,
+        payment_period: row.get(7)?,
+        payment_months: row.get(8)?,
+        rent: row.get(9)?,
+        management_fee: row.get(10)?,
+        actual_start_date: row.get(11)?,
+        actual_end_date: row.get(12)?,
+        actual_months: row.get(13)?,
+        rent_gifted: row.get::<_, i64>(14)? != 0,
+        property_fee_owed: row.get::<_, i64>(15)? != 0,
+        operator: row.get(16)?,
+        remark: row.get(17)?,
+        source_file: row.get(18)?,
+    })
+}
+
+pub fn save_monthly_card_ledgers(req: SaveMonthlyCardLedgersRequest) -> Result<usize, String> {
+    let db = db();
+    let mut conn = db.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    if req.replace {
+        tx.execute("DELETE FROM monthly_card_ledger", [])
+            .map_err(|e| e.to_string())?;
+    }
+
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO monthly_card_ledger (
+                seq, process_date, room_number, owner_name, owner_phone,
+                plate, payment_period, payment_months, rent, management_fee,
+                actual_start_date, actual_end_date, actual_months,
+                rent_gifted, property_fee_owed, operator, remark, source_file
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+            )"
+        ).map_err(|e| e.to_string())?;
+
+        for r in &req.records {
+            stmt.execute(rusqlite::params![
+                r.seq, r.process_date, r.room_number, r.owner_name, r.owner_phone,
+                r.plate.trim(), r.payment_period, r.payment_months, r.rent, r.management_fee,
+                r.actual_start_date, r.actual_end_date, r.actual_months,
+                if r.rent_gifted { 1 } else { 0 },
+                if r.property_fee_owed { 1 } else { 0 },
+                r.operator, r.remark, r.source_file
+            ]).map_err(|e| e.to_string())?;
+        }
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(req.records.len())
+}
+
+fn build_monthly_card_ledger_where_clause(filter: &ListMonthlyCardLedgerFilter) -> String {
+    let mut conditions: Vec<String> = vec![];
+    if let Some(s) = &filter.plate {
+        conditions.push(format!("TRIM(plate) LIKE '%{}%'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.owner_name {
+        conditions.push(format!("owner_name LIKE '%{}%'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.room_number {
+        conditions.push(format!("room_number LIKE '%{}%'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.process_date_start {
+        conditions.push(format!("process_date >= '{}'", s.replace("'", "''")));
+    }
+    if let Some(s) = &filter.process_date_end {
+        conditions.push(format!("process_date <= '{}'", s.replace("'", "''")));
+    }
+    if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    }
+}
+
+pub fn list_monthly_card_ledgers(filter: ListMonthlyCardLedgerFilter) -> Result<Paginated<MonthlyCardLedger>, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+
+    let where_clause = build_monthly_card_ledger_where_clause(&filter);
+
+    let total: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM monthly_card_ledger {}", where_clause),
+        [],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+
+    let offset = (filter.page - 1) * filter.per_page;
+    let sql = format!(
+        "SELECT * FROM monthly_card_ledger {} ORDER BY id LIMIT {} OFFSET {}",
+        where_clause, filter.per_page, offset
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let items = stmt
+        .query_map([], map_monthly_card_ledger)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(Paginated {
+        items,
+        total,
+        page: filter.page,
+        per_page: filter.per_page,
+    })
+}
+
+pub fn clear_monthly_card_ledgers() -> Result<usize, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let count = conn.execute("DELETE FROM monthly_card_ledger", [])
+        .map_err(|e| e.to_string())?;
     Ok(count)
 }
 

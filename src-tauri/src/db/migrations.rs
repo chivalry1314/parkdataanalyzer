@@ -116,4 +116,45 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_free_cars_room ON free_cars(room);
         "#,
     ),
+    (
+        "006_add_app_settings",
+        r#"
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT ''
+        );
+        "#,
+    ),
+    (
+        "007_add_monthly_card_ledger",
+        r#"
+        CREATE TABLE IF NOT EXISTS monthly_card_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            seq INTEGER NOT NULL DEFAULT 0,
+            process_date TEXT NOT NULL DEFAULT '',
+            room_number TEXT NOT NULL DEFAULT '',
+            owner_name TEXT NOT NULL DEFAULT '',
+            owner_phone TEXT NOT NULL DEFAULT '',
+            plate TEXT NOT NULL DEFAULT '',
+            payment_period TEXT NOT NULL DEFAULT '',
+            payment_months INTEGER NOT NULL DEFAULT 0,
+            rent INTEGER NOT NULL DEFAULT 0,
+            management_fee INTEGER NOT NULL DEFAULT 0,
+            actual_start_date TEXT NOT NULL DEFAULT '',
+            actual_end_date TEXT NOT NULL DEFAULT '',
+            actual_months INTEGER NOT NULL DEFAULT 0,
+            rent_gifted INTEGER NOT NULL DEFAULT 0,
+            property_fee_owed INTEGER NOT NULL DEFAULT 0,
+            operator TEXT NOT NULL DEFAULT '',
+            remark TEXT NOT NULL DEFAULT '',
+            source_file TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_monthly_card_ledger_plate ON monthly_card_ledger(plate);
+        CREATE INDEX IF NOT EXISTS idx_monthly_card_ledger_room_number ON monthly_card_ledger(room_number);
+        CREATE INDEX IF NOT EXISTS idx_monthly_card_ledger_owner_name ON monthly_card_ledger(owner_name);
+        CREATE INDEX IF NOT EXISTS idx_monthly_card_ledger_process_date ON monthly_card_ledger(process_date);
+        "#,
+    ),
 ];

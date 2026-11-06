@@ -1,12 +1,62 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { getDbPath, setDbPath } from "../api";
+import { getDbPath, getSetting, setDbPath, setSetting } from "../api";
 
 const dbPath = ref("");
 const migrateData = ref(true);
 const dbStatus = ref("");
+
+const monthlyEditable = ref(false);
+const freeCarEditable = ref(false);
+const settingsLoaded = ref(false);
+
+const MONTHLY_EDITABLE_KEY = "monthly_rental_editable";
+const FREE_CAR_EDITABLE_KEY = "free_car_editable";
+
+function parseBool(value: string | null, defaultValue: boolean): boolean {
+  if (value === null || value === undefined) return defaultValue;
+  return value === "1" || value.toLowerCase() === "true";
+}
+
+async function loadSettings() {
+  try {
+    const [monthly, freeCar] = await Promise.all([
+      getSetting(MONTHLY_EDITABLE_KEY),
+      getSetting(FREE_CAR_EDITABLE_KEY),
+    ]);
+    monthlyEditable.value = parseBool(monthly, false);
+    freeCarEditable.value = parseBool(freeCar, false);
+    settingsLoaded.value = true;
+  } catch (err) {
+    dbStatus.value = `加载设置失败：${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function saveMonthlyEditable(value: boolean) {
+  try {
+    await setSetting(MONTHLY_EDITABLE_KEY, value ? "1" : "0");
+  } catch (err) {
+    dbStatus.value = `保存设置失败：${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function saveFreeCarEditable(value: boolean) {
+  try {
+    await setSetting(FREE_CAR_EDITABLE_KEY, value ? "1" : "0");
+  } catch (err) {
+    dbStatus.value = `保存设置失败：${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+watch(monthlyEditable, (value) => {
+  if (settingsLoaded.value) saveMonthlyEditable(value);
+});
+
+watch(freeCarEditable, (value) => {
+  if (settingsLoaded.value) saveFreeCarEditable(value);
+});
 
 onMounted(async () => {
   try {
@@ -14,6 +64,7 @@ onMounted(async () => {
   } catch (err) {
     dbPath.value = `获取路径失败：${err instanceof Error ? err.message : String(err)}`;
   }
+  await loadSettings();
 });
 
 const changeDbPath = async () => {
@@ -62,8 +113,54 @@ const changeDbPath = async () => {
           修改数据库路径
         </button>
       </div>
-      <div v-if="dbStatus" class="mt-3 text-sm" :class="dbStatus.startsWith('切换失败') ? 'text-red-600' : 'text-green-600'">
+      <div v-if="dbStatus" class="mt-3 text-sm" :class="dbStatus.startsWith('切换失败') || dbStatus.startsWith('加载设置失败') || dbStatus.startsWith('保存设置失败') ? 'text-red-600' : 'text-green-600'">
         {{ dbStatus }}
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border p-6">
+      <h3 class="font-semibold text-slate-800 mb-4">功能开关</h3>
+      <div class="space-y-4">
+        <label class="flex items-center justify-between gap-4 p-3 border rounded-lg hover:bg-slate-50 cursor-pointer">
+          <div>
+            <div class="text-sm font-medium text-slate-800">允许编辑月租车</div>
+            <div class="text-xs text-slate-500">开启后，月租车列表将显示编辑按钮</div>
+          </div>
+          <div
+            class="relative w-11 h-6 rounded-full transition-colors"
+            :class="monthlyEditable ? 'bg-blue-600' : 'bg-slate-300'"
+          >
+            <input
+              type="checkbox"
+              v-model="monthlyEditable"
+              class="sr-only"
+            />
+            <span
+              class="absolute top-1 left-1 bg-white w-4 h-4 rounded-full transition-transform"
+              :class="monthlyEditable ? 'translate-x-5' : 'translate-x-0'"
+            ></span>
+          </div>
+        </label>
+        <label class="flex items-center justify-between gap-4 p-3 border rounded-lg hover:bg-slate-50 cursor-pointer">
+          <div>
+            <div class="text-sm font-medium text-slate-800">允许编辑免费车</div>
+            <div class="text-xs text-slate-500">开启后，免费车列表将显示编辑按钮</div>
+          </div>
+          <div
+            class="relative w-11 h-6 rounded-full transition-colors"
+            :class="freeCarEditable ? 'bg-blue-600' : 'bg-slate-300'"
+          >
+            <input
+              type="checkbox"
+              v-model="freeCarEditable"
+              class="sr-only"
+            />
+            <span
+              class="absolute top-1 left-1 bg-white w-4 h-4 rounded-full transition-transform"
+              :class="freeCarEditable ? 'translate-x-5' : 'translate-x-0'"
+            ></span>
+          </div>
+        </label>
       </div>
     </div>
   </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { save } from "@tauri-apps/plugin-dialog";
 import { getVehicleMonthlyStats, listVehicleRecords, exportVehicleCharges } from "../api";
 import type { ParkingRecord, VehicleMonthlyItem } from "../types";
@@ -10,6 +10,18 @@ const loading = ref(false);
 const exporting = ref(false);
 const error = ref("");
 const monthlyStats = ref<VehicleMonthlyItem[]>([]);
+const totalStats = computed(() => {
+  return monthlyStats.value.reduce(
+    (acc, item) => {
+      acc.count += item.count;
+      acc.due += item.due;
+      acc.paid += item.paid;
+      acc.unpaid += item.unpaid;
+      return acc;
+    },
+    { count: 0, due: 0, paid: 0, unpaid: 0 }
+  );
+});
 const filtersExpanded = ref(false);
 const timeFilters = ref({
   entryTimeStart: "",
@@ -247,7 +259,12 @@ const detailTotalPages = () => Math.max(1, Math.ceil(detailTotal.value / detailP
 
       <template v-else-if="monthlyStats.length > 0">
         <div class="px-4 pt-2 shrink-0">
-          <p class="text-sm text-slate-500">车牌号：{{ plate }}，共 {{ monthlyStats.length }} 个月</p>
+          <p class="text-sm text-slate-500">
+            车牌号：{{ plate }}，共 {{ monthlyStats.length }} 个月，
+            应收 {{ formatMoney(totalStats.due) }}，
+            实收 {{ formatMoney(totalStats.paid) }}，
+            未收 {{ formatMoney(totalStats.unpaid) }}
+          </p>
         </div>
 
         <div class="px-4 pt-2 shrink-0">

@@ -5,27 +5,32 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import BuildingCharges from "./components/BuildingCharges.vue";
 import FilterStats from "./components/FilterStats.vue";
 import FreeCars from "./components/FreeCars.vue";
+import MonthlyCardLedgerComponent from "./components/MonthlyCardLedger.vue";
 import MonthlyRentals from "./components/MonthlyRentals.vue";
 import RecordList from "./components/RecordList.vue";
 import StatsPanel from "./components/StatsPanel.vue";
 import VehicleCharges from "./components/VehicleCharges.vue";
 import Onboarding from "./views/Onboarding.vue";
 import Settings from "./views/Settings.vue";
-import { parseFreeCarZipFile, parseMonthlyRentalZipFile, parseZipFile } from "./utils/parser";
+import { parseFreeCarZipFile, parseMonthlyCardLedgerXlsxFile, parseMonthlyRentalZipFile, parseZipFile } from "./utils/parser";
 import {
   cleanFreeCarAddresses,
   cleanMonthlyRentalAddresses,
   clearFreeCars,
+  clearMonthlyCardLedgers,
   clearMonthlyRentals,
   clearRecords,
   getBackendInfo,
   getBuildingCharges,
   getDbPath,
   getFilteredStats,
+  getSetting,
   listFreeCars,
+  listMonthlyCardLedgers,
   listMonthlyRentals,
   listRecords,
   saveFreeCars,
+  saveMonthlyCardLedgers,
   saveMonthlyRentals,
   saveRecords,
   updateFreeCar,
@@ -35,6 +40,8 @@ import type {
   BuildingChargesFilters,
   FreeCar,
   FreeCarFilters,
+  MonthlyCardLedger,
+  MonthlyCardLedgerFilters,
   MonthlyRentalFilters,
   MonthlyRentalVehicle,
   ParkingRecord,
@@ -48,7 +55,7 @@ const progress = ref(0);
 const progressText = ref("准备中...");
 const messageText = ref("");
 const messageType = ref<"info" | "error">("info");
-const activeMenu = ref<"records" | "stats" | "vehicle" | "monthly" | "free" | "building" | "settings">("records");
+const activeMenu = ref<"records" | "stats" | "vehicle" | "monthly" | "free" | "building" | "settings" | "monthlyCardLedger">("records");
 const menuCollapsed = ref(false);
 const dbReady = ref<boolean | null>(null);
 const backendInfo = ref("");
@@ -58,6 +65,7 @@ const menuItems = [
   { key: "records", label: "记录列表", short: "列" },
   { key: "monthly", label: "月租车", short: "月" },
   { key: "free", label: "免费车", short: "免" },
+  { key: "monthlyCardLedger", label: "月卡台账", short: "卡" },
   { key: "building", label: "楼栋收费", short: "栋" },
   { key: "vehicle", label: "车辆收费", short: "车" },
   { key: "stats", label: "统计分析", short: "统" },
@@ -115,9 +123,43 @@ const freeCarFilters = ref<FreeCarFilters>({
 });
 const appliedFreeCarFilters = ref<FreeCarFilters>({ ...freeCarFilters.value });
 
+const monthlyCardLedgerRecords = ref<MonthlyCardLedger[]>([]);
+const monthlyCardLedgerTotal = ref(0);
+const monthlyCardLedgerPage = ref(1);
+const monthlyCardLedgerPageSize = ref(20);
+const monthlyCardLedgerFilters = ref<MonthlyCardLedgerFilters>({
+  plate: "",
+  ownerName: "",
+  roomNumber: "",
+  processDateStart: "",
+  processDateEnd: "",
+});
+const appliedMonthlyCardLedgerFilters = ref<MonthlyCardLedgerFilters>({ ...monthlyCardLedgerFilters.value });
+
 const buildingChargesRef = ref<InstanceType<typeof BuildingCharges> | null>(null);
 const monthlyRentalsRef = ref<InstanceType<typeof MonthlyRentals> | null>(null);
 const freeCarsRef = ref<InstanceType<typeof FreeCars> | null>(null);
+
+const monthlyEditable = ref(false);
+const freeCarEditable = ref(false);
+
+function parseBoolSetting(value: string | null, defaultValue: boolean): boolean {
+  if (value === null || value === undefined) return defaultValue;
+  return value === "1" || value.toLowerCase() === "true";
+}
+
+async function loadEditSettings() {
+  try {
+    const [monthly, freeCar] = await Promise.all([
+      getSetting("monthly_rental_editable"),
+      getSetting("free_car_editable"),
+    ]);
+    monthlyEditable.value = parseBoolSetting(monthly, false);
+    freeCarEditable.value = parseBoolSetting(freeCar, false);
+  } catch (err) {
+    showError(`加载编辑设置失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 const buildingChargesLoading = ref(false);
 const buildingChargesFilters = ref<BuildingChargesFilters>({
   building: "",
@@ -315,6 +357,86 @@ async function handleSaveFreeCar(record: FreeCar) {
     freeCarsRef.value?.closeModal();
   } catch (err) {
     showError(`保存失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function loadMonthlyCardLedgers() {
+  try {
+    const result = await listMonthlyCardLedgers({
+      plate: appliedMonthlyCardLedgerFilters.value.plate || undefined,
+      ownerName: appliedMonthlyCardLedgerFilters.value.ownerName || undefined,
+      roomNumber: appliedMonthlyCardLedgerFilters.value.roomNumber || undefined,
+      processDateStart: appliedMonthlyCardLedgerFilters.value.processDateStart || undefined,
+      processDateEnd: appliedMonthlyCardLedgerFilters.value.processDateEnd || undefined,
+      page: monthlyCardLedgerPage.value,
+      perPage: monthlyCardLedgerPageSize.value,
+    });
+    monthlyCardLedgerRecords.value = result.items;
+    monthlyCardLedgerTotal.value = result.total;
+  } catch (err) {
+    showError(`加载月卡台账失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function handleMonthlyCardLedgerSearch(newFilters: MonthlyCardLedgerFilters) {
+  appliedMonthlyCardLedgerFilters.value = { ...newFilters };
+  monthlyCardLedgerFilters.value = { ...newFilters };
+  monthlyCardLedgerPage.value = 1;
+  await loadMonthlyCardLedgers();
+}
+
+async function handleMonthlyCardLedgerReset() {
+  appliedMonthlyCardLedgerFilters.value = {
+    plate: "",
+    ownerName: "",
+    roomNumber: "",
+    processDateStart: "",
+    processDateEnd: "",
+  };
+  monthlyCardLedgerFilters.value = { ...appliedMonthlyCardLedgerFilters.value };
+  monthlyCardLedgerPage.value = 1;
+  await loadMonthlyCardLedgers();
+}
+
+async function handleImportMonthlyCardLedger(filePath: string, data: Uint8Array) {
+  loading.value = true;
+  try {
+    const fileName = filePath.split(/[\\/]/).pop() || filePath;
+    const result = parseMonthlyCardLedgerXlsxFile(data, fileName);
+    if (result.records.length === 0 && result.errors.length === 0) {
+      showError("未在文件中找到有效的月卡台账记录。");
+      return;
+    }
+    await saveMonthlyCardLedgers({ records: result.records, replace: true });
+    showInfo(`成功导入 ${result.records.length.toLocaleString()} 条月卡台账记录。`);
+    if (result.errors.length > 0) {
+      showError(result.errors.join("；"));
+    }
+    monthlyCardLedgerPage.value = 1;
+    appliedMonthlyCardLedgerFilters.value = {
+      plate: "",
+      ownerName: "",
+      roomNumber: "",
+      processDateStart: "",
+      processDateEnd: "",
+    };
+    monthlyCardLedgerFilters.value = { ...appliedMonthlyCardLedgerFilters.value };
+    await loadMonthlyCardLedgers();
+  } catch (err) {
+    showError(`导入失败：${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function handleClearMonthlyCardLedgers() {
+  try {
+    const count = await clearMonthlyCardLedgers();
+    showInfo(`已清空 ${count.toLocaleString()} 条月卡台账记录。`);
+    monthlyCardLedgerPage.value = 1;
+    await loadMonthlyCardLedgers();
+  } catch (err) {
+    showError(`清空失败：${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -542,6 +664,8 @@ async function handleClear() {
     confirmText = "确定要清空数据库中的所有月租车记录吗？此操作不可恢复。";
   } else if (activeMenu.value === "free") {
     confirmText = "确定要清空数据库中的所有免费车记录吗？此操作不可恢复。";
+  } else if (activeMenu.value === "monthlyCardLedger") {
+    confirmText = "确定要清空数据库中的所有月卡台账记录吗？此操作不可恢复。";
   }
   const ok = await confirm(confirmText, {
     title: "请确认",
@@ -581,6 +705,19 @@ async function handleClear() {
       };
       freeCarFilters.value = { ...appliedFreeCarFilters.value };
       await loadFreeCars();
+    } else if (activeMenu.value === "monthlyCardLedger") {
+      await clearMonthlyCardLedgers();
+      showInfo("月卡台账记录已清空。");
+      monthlyCardLedgerPage.value = 1;
+      appliedMonthlyCardLedgerFilters.value = {
+        plate: "",
+        ownerName: "",
+        roomNumber: "",
+        processDateStart: "",
+        processDateEnd: "",
+      };
+      monthlyCardLedgerFilters.value = { ...appliedMonthlyCardLedgerFilters.value };
+      await loadMonthlyCardLedgers();
     } else {
       await clearRecords();
       showInfo("数据库已清空。");
@@ -621,12 +758,28 @@ watch(freeCarPage, () => {
   loadFreeCars();
 });
 
+watch(monthlyCardLedgerPage, () => {
+  loadMonthlyCardLedgers();
+});
+
+watch(activeMenu, (value) => {
+  if (value === "monthly" || value === "free" || value === "settings") {
+    loadEditSettings();
+  }
+});
+
 onMounted(async () => {
   try {
     backendInfo.value = await getBackendInfo();
     dbPath.value = await getDbPath();
     dbReady.value = true;
-    await Promise.all([loadRecords(), loadMonthlyRentals(), loadFreeCars()]);
+    await Promise.all([
+      loadRecords(),
+      loadMonthlyRentals(),
+      loadFreeCars(),
+      loadMonthlyCardLedgers(),
+      loadEditSettings(),
+    ]);
   } catch {
     dbReady.value = false;
   }
@@ -771,6 +924,7 @@ onMounted(async () => {
             :total="monthlyTotal"
             :loading="loading"
             :cleaning="cleaningAddresses"
+            :editable="monthlyEditable"
             @search="handleMonthlySearch"
             @reset="handleMonthlyReset"
             @save="handleSaveMonthlyRental"
@@ -788,12 +942,27 @@ onMounted(async () => {
             :total="freeCarTotal"
             :loading="loading"
             :cleaning="cleaningAddresses"
+            :editable="freeCarEditable"
             @search="handleFreeCarSearch"
             @reset="handleFreeCarReset"
             @save="handleSaveFreeCar"
             @update:page-size="(v) => { freeCarPageSize = v; freeCarPage = 1; loadFreeCars(); }"
             @clean-addresses="handleCleanFreeCarAddresses"
             @import-zip="selectFile('free')"
+          />
+          <MonthlyCardLedgerComponent
+            v-else-if="activeMenu === 'monthlyCardLedger'"
+            v-model:page="monthlyCardLedgerPage"
+            :page-size="monthlyCardLedgerPageSize"
+            :filters="monthlyCardLedgerFilters"
+            :records="monthlyCardLedgerRecords"
+            :total="monthlyCardLedgerTotal"
+            :loading="loading"
+            @search="handleMonthlyCardLedgerSearch"
+            @reset="handleMonthlyCardLedgerReset"
+            @import-file="handleImportMonthlyCardLedger"
+            @clear="handleClearMonthlyCardLedgers"
+            @update:page-size="(v) => { monthlyCardLedgerPageSize = v; monthlyCardLedgerPage = 1; loadMonthlyCardLedgers(); }"
           />
           <BuildingCharges
             v-else-if="activeMenu === 'building'"

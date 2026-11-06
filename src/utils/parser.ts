@@ -3,6 +3,8 @@ import JSZip from "jszip";
 import type {
   FreeCar,
   FreeCarParseResult,
+  MonthlyCardLedger,
+  MonthlyCardLedgerParseResult,
   MonthlyRentalParseResult,
   MonthlyRentalVehicle,
   ParseResult,
@@ -456,6 +458,90 @@ export async function parseMonthlyRentalZipFile(
     } catch (err) {
       errors.push(`解析文件 ${name} 失败：${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  return { records, errors };
+}
+
+function parseBoolCell(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  const s = String(value).trim();
+  return s === "是" || s === "1" || s.toLowerCase() === "true" || s === "yes";
+}
+
+function parseIntCell(value: unknown): number {
+  if (value === null || value === undefined || value === "") return 0;
+  const n = Number(String(value).replace(/,/g, "").trim());
+  return Number.isNaN(n) ? 0 : Math.round(n);
+}
+
+function parseStringCell(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/\n/g, " ").trim();
+}
+
+function buildMonthlyCardLedgerRecord(
+  row: unknown[],
+  sourceFile: string,
+  id: number
+): MonthlyCardLedger | null {
+  if (!Array.isArray(row) || row.every((c) => c === null || c === undefined || String(c).trim() === "")) {
+    return null;
+  }
+
+  const plate = parseStringCell(row[5]);
+  if (!plate) return null;
+
+  return {
+    id,
+    seq: parseIntCell(row[0]),
+    processDate: parseStringCell(row[1]),
+    roomNumber: parseStringCell(row[2]),
+    ownerName: parseStringCell(row[3]),
+    ownerPhone: parseStringCell(row[4]),
+    plate,
+    paymentPeriod: parseStringCell(row[6]),
+    paymentMonths: parseIntCell(row[7]),
+    rent: parseMoney(row[8]),
+    managementFee: parseMoney(row[9]),
+    actualStartDate: parseStringCell(row[10]),
+    actualEndDate: parseStringCell(row[11]),
+    actualMonths: parseIntCell(row[12]),
+    rentGifted: parseBoolCell(row[13]),
+    propertyFeeOwed: parseBoolCell(row[14]),
+    operator: parseStringCell(row[15]),
+    remark: parseStringCell(row[16]),
+    sourceFile,
+  };
+}
+
+export function parseMonthlyCardLedgerXlsxFile(
+  data: Uint8Array,
+  sourceFile: string
+): MonthlyCardLedgerParseResult {
+  const records: MonthlyCardLedger[] = [];
+  const errors: string[] = [];
+  let idCounter = 1;
+
+  try {
+    const workbook = XLSX.read(data, { type: "array", cellText: true, cellDates: false });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false }) as unknown[][];
+
+    if (rows.length < 4) {
+      errors.push("Excel 文件内容不足，至少需要包含表头和一行数据");
+      return { records, errors };
+    }
+
+    for (let i = 3; i < rows.length; i++) {
+      const record = buildMonthlyCardLedgerRecord(rows[i], sourceFile, idCounter++);
+      if (record) {
+        records.push(record);
+      }
+    }
+  } catch (err) {
+    errors.push(`解析文件失败：${err instanceof Error ? err.message : String(err)}`);
   }
 
   return { records, errors };

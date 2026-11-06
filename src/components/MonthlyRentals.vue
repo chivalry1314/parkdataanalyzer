@@ -10,6 +10,7 @@ const props = defineProps<{
   filters: MonthlyRentalFilters;
   loading?: boolean;
   cleaning?: boolean;
+  editable?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -244,11 +245,13 @@ defineExpose({ closeModal });
             <td class="px-4 py-3 text-slate-500">{{ record.sourceFile }}</td>
             <td class="px-4 py-3">
               <button
+                v-if="editable"
                 @click="startEdit(record)"
                 class="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-medium transition"
               >
                 编辑
               </button>
+              <span v-else class="text-xs text-slate-400">—</span>
             </td>
           </tr>
           <tr v-if="records.length === 0">

@@ -102,8 +102,33 @@ pub fn update_free_car_command(record: FreeCar) -> Result<usize, String> {
 }
 
 #[tauri::command]
+pub fn save_monthly_card_ledgers_command(req: SaveMonthlyCardLedgersRequest) -> Result<usize, String> {
+    db::save_monthly_card_ledgers(req)
+}
+
+#[tauri::command]
+pub fn list_monthly_card_ledgers_command(filter: ListMonthlyCardLedgerFilter) -> Result<Paginated<MonthlyCardLedger>, String> {
+    db::list_monthly_card_ledgers(filter)
+}
+
+#[tauri::command]
+pub fn clear_monthly_card_ledgers_command() -> Result<usize, String> {
+    db::clear_monthly_card_ledgers()
+}
+
+#[tauri::command]
 pub fn get_building_charge_detail_command(filter: BuildingChargesFilter) -> Result<Vec<BuildingChargePlateDetail>, String> {
     db::get_building_charge_detail(filter)
+}
+
+#[tauri::command]
+pub fn get_setting_command(key: String) -> Result<Option<String>, String> {
+    db::get_setting(&key)
+}
+
+#[tauri::command]
+pub fn set_setting_command(key: String, value: String) -> Result<(), String> {
+    db::set_setting(&key, &value)
 }
 
 #[tauri::command]

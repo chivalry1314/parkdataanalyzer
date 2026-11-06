@@ -119,6 +119,41 @@ export interface FreeCarFilters {
   endDateEnd: string;
 }
 
+export interface MonthlyCardLedger {
+  id: number;
+  seq: number;
+  processDate: string;
+  roomNumber: string;
+  ownerName: string;
+  ownerPhone: string;
+  plate: string;
+  paymentPeriod: string;
+  paymentMonths: number;
+  rent: number;
+  managementFee: number;
+  actualStartDate: string;
+  actualEndDate: string;
+  actualMonths: number;
+  rentGifted: boolean;
+  propertyFeeOwed: boolean;
+  operator: string;
+  remark: string;
+  sourceFile: string;
+}
+
+export interface MonthlyCardLedgerParseResult {
+  records: MonthlyCardLedger[];
+  errors: string[];
+}
+
+export interface MonthlyCardLedgerFilters {
+  plate: string;
+  ownerName: string;
+  roomNumber: string;
+  processDateStart: string;
+  processDateEnd: string;
+}
+
 export interface BuildingChargesFilters {
   building: string;
   unit: string;

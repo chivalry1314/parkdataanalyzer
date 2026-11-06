@@ -4,6 +4,7 @@ import type {
   BuildingChargePlateDetail,
   BuildingChargesFilters,
   FreeCar,
+  MonthlyCardLedger,
   MonthlyRentalVehicle,
   Paginated,
   ParkingRecord,
@@ -257,6 +258,49 @@ export const updateFreeCar = (record: FreeCar) =>
 export const updateMonthlyRental = (record: MonthlyRentalVehicle) =>
   invoke<number>("update_monthly_rental_command", { record });
 
+export interface SaveMonthlyCardLedgersRequest {
+  records: MonthlyCardLedger[];
+  replace: boolean;
+}
+
+export interface ListMonthlyCardLedgerFilter {
+  plate?: string;
+  ownerName?: string;
+  roomNumber?: string;
+  processDateStart?: string;
+  processDateEnd?: string;
+  page: number;
+  perPage: number;
+}
+
+export const saveMonthlyCardLedgers = (req: SaveMonthlyCardLedgersRequest) =>
+  invoke<number>("save_monthly_card_ledgers_command", { req });
+
+export const listMonthlyCardLedgers = async (
+  filter: ListMonthlyCardLedgerFilter
+): Promise<Paginated<MonthlyCardLedger>> => {
+  const raw = await invoke<RawPaginated<MonthlyCardLedger>>("list_monthly_card_ledgers_command", {
+    filter: {
+      plate: filter.plate,
+      owner_name: filter.ownerName,
+      room_number: filter.roomNumber,
+      process_date_start: filter.processDateStart,
+      process_date_end: filter.processDateEnd,
+      page: filter.page,
+      per_page: filter.perPage,
+    },
+  });
+  return {
+    items: raw.items,
+    total: raw.total,
+    page: raw.page,
+    perPage: raw.per_page,
+  };
+};
+
+export const clearMonthlyCardLedgers = () =>
+  invoke<number>("clear_monthly_card_ledgers_command");
+
 export const getBuildingCharges = async (filter: BuildingChargesFilters): Promise<Paginated<BuildingChargeItem>> => {
   const raw = await invoke<RawPaginated<BuildingChargeItem>>("get_building_charges_command", {
     filter: {
@@ -308,6 +352,12 @@ export const exportBuildingCharges = (filePath: string, filter: BuildingChargesF
 
 export const getBackendInfo = () => invoke<string>("get_backend_info_command");
 export const getDbPath = () => invoke<string>("get_db_path_command");
+
+export const getSetting = (key: string) =>
+  invoke<string | null>("get_setting_command", { key });
+
+export const setSetting = (key: string, value: string) =>
+  invoke<void>("set_setting_command", { key, value });
 export const getDefaultDbPath = () => invoke<string>("get_default_db_path_command");
 export const setDbPath = (path: string, migrate: boolean) =>
   invoke<string>("set_db_path_command", { path, migrate });

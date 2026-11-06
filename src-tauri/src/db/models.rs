@@ -240,6 +240,59 @@ pub struct ListFreeCarsFilter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonthlyCardLedger {
+    pub id: i64,
+    pub seq: i64,
+    #[serde(rename = "processDate")]
+    pub process_date: String,
+    #[serde(rename = "roomNumber")]
+    pub room_number: String,
+    #[serde(rename = "ownerName")]
+    pub owner_name: String,
+    #[serde(rename = "ownerPhone")]
+    pub owner_phone: String,
+    pub plate: String,
+    #[serde(rename = "paymentPeriod")]
+    pub payment_period: String,
+    #[serde(rename = "paymentMonths")]
+    pub payment_months: i64,
+    pub rent: i64,
+    #[serde(rename = "managementFee")]
+    pub management_fee: i64,
+    #[serde(rename = "actualStartDate")]
+    pub actual_start_date: String,
+    #[serde(rename = "actualEndDate")]
+    pub actual_end_date: String,
+    #[serde(rename = "actualMonths")]
+    pub actual_months: i64,
+    #[serde(rename = "rentGifted")]
+    pub rent_gifted: bool,
+    #[serde(rename = "propertyFeeOwed")]
+    pub property_fee_owed: bool,
+    pub operator: String,
+    pub remark: String,
+    #[serde(rename = "sourceFile")]
+    pub source_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveMonthlyCardLedgersRequest {
+    pub records: Vec<MonthlyCardLedger>,
+    pub replace: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListMonthlyCardLedgerFilter {
+    pub plate: Option<String>,
+    pub owner_name: Option<String>,
+    pub room_number: Option<String>,
+    pub process_date_start: Option<String>,
+    pub process_date_end: Option<String>,
+    pub page: i64,
+    pub per_page: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildingChargeItem {
     #[serde(rename = "building")]
     pub building: String,
