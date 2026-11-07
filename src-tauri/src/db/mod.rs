@@ -57,12 +57,21 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             )
             .unwrap_or(false);
         if !applied {
-            conn.execute_batch(sql)?;
+            for stmt in sql.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                if let Err(e) = conn.execute(stmt, []) {
+                    let msg = e.to_string();
+                    if msg.contains("duplicate column name") {
+                        eprintln!("Migration {}: column already exists, skipping: {}", id, msg);
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
             conn.execute("INSERT INTO migrations_applied (id) VALUES (?1)", [id])?;
         }
     }
 
-    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    conn.execute("PRAGMA foreign_keys = ON;", [])?;
     Ok(())
 }
 
@@ -105,12 +114,11 @@ pub fn is_db_configured(app_dir: &Path) -> bool {
 }
 
 pub fn init_db(app_dir: PathBuf) -> Result<(), String> {
-    let is_same_dir = APP_DIR.get().map(|d| d == &app_dir).unwrap_or(false);
     if APP_DIR.get().is_none() {
         APP_DIR.set(app_dir.clone()).map_err(|_| "应用目录已初始化".to_string())?;
     }
 
-    let config = if is_same_dir { load_config() } else { AppConfig::default() };
+    let config = load_config();
     let db_path = config.db_path.unwrap_or_else(|| app_dir.join("parkingsyslog.db"));
 
     set_active_db(db_path)
