@@ -308,6 +308,20 @@ function detailTotal(items: VehicleMonthlyItem[]) {
   );
 }
 
+const recordsSummary = computed(() => {
+  const items = records.value?.items ?? [];
+  return items.reduce(
+    (acc, record) => {
+      acc.count += 1;
+      acc.due += record.dueAmount;
+      acc.paid += record.paidAmount;
+      acc.unpaid += record.dueAmount - record.paidAmount;
+      return acc;
+    },
+    { count: 0, due: 0, paid: 0, unpaid: 0 }
+  );
+});
+
 defineExpose({ setItems });
 </script>
 
@@ -656,7 +670,10 @@ defineExpose({ setItems });
             {{ recordsPlate }} - {{ recordsMonth }}
           </h3>
           <p class="text-sm text-slate-500">
-            共 {{ records?.total ?? 0 }} 条记录
+            共 {{ records?.total ?? 0 }} 条记录，
+            应收 {{ recordsSummary.due.toFixed(2) }}，
+            实收 {{ recordsSummary.paid.toFixed(2) }}，
+            欠费 {{ recordsSummary.unpaid.toFixed(2) }}
           </p>
         </div>
 

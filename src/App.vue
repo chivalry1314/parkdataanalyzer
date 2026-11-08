@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { confirm, message, open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import BuildingCharges from "./components/BuildingCharges.vue";
 import FilterStats from "./components/FilterStats.vue";
 import FreeCars from "./components/FreeCars.vue";
+import ImportProgress from "./components/ImportProgress.vue";
 import MonthlyCardLedgerComponent from "./components/MonthlyCardLedger.vue";
 import MonthlyRentals from "./components/MonthlyRentals.vue";
 import RecordList from "./components/RecordList.vue";
@@ -20,12 +21,12 @@ import {
   clearMonthlyCardLedgers,
   clearMonthlyRentals,
   clearRecords,
-  getBackendInfo,
   getBuildingCharges,
   getDbPath,
   getFilteredStats,
   getSetting,
   listFreeCars,
+  setSetting,
   listMonthlyCardLedgers,
   listMonthlyRentals,
   listRecords,
@@ -58,8 +59,25 @@ const messageType = ref<"info" | "error">("info");
 const activeMenu = ref<"records" | "stats" | "vehicle" | "monthly" | "free" | "building" | "settings" | "monthlyCardLedger">("records");
 const menuCollapsed = ref(false);
 const dbReady = ref<boolean | null>(null);
-const backendInfo = ref("");
 const dbPath = ref("");
+const lastImportTime = ref("");
+const currentTime = ref(formatCurrentDateTime(new Date()));
+let currentTimeTimer: ReturnType<typeof setInterval> | null = null;
+
+function formatCurrentDateTime(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+async function updateLastImportTime() {
+  const now = formatCurrentDateTime(new Date());
+  lastImportTime.value = now;
+  try {
+    await setSetting("lastImportTime", now);
+  } catch {
+    // ignore setting save errors
+  }
+}
 
 const menuItems = [
   { key: "records", label: "记录列表", short: "列" },
@@ -422,6 +440,7 @@ async function handleImportMonthlyCardLedger(filePath: string, data: Uint8Array)
     };
     monthlyCardLedgerFilters.value = { ...appliedMonthlyCardLedgerFilters.value };
     await loadMonthlyCardLedgers();
+    await updateLastImportTime();
   } catch (err) {
     showError(`导入失败：${err instanceof Error ? err.message : String(err)}`);
   } finally {
@@ -643,6 +662,8 @@ async function handleFileLoad(data: Uint8Array, _path: string, type: "records" |
       await loadRecords();
       statsRefreshKey.value++;
     }
+
+    await updateLastImportTime();
   } catch (err) {
     const text = `处理失败：${err instanceof Error ? err.message : String(err)}`;
     showError(text);
@@ -770,9 +791,9 @@ watch(activeMenu, (value) => {
 
 onMounted(async () => {
   try {
-    backendInfo.value = await getBackendInfo();
     dbPath.value = await getDbPath();
     dbReady.value = true;
+    lastImportTime.value = (await getSetting("lastImportTime")) ?? "";
     await Promise.all([
       loadRecords(),
       loadMonthlyRentals(),
@@ -782,6 +803,16 @@ onMounted(async () => {
     ]);
   } catch {
     dbReady.value = false;
+  }
+  currentTimeTimer = setInterval(() => {
+    currentTime.value = formatCurrentDateTime(new Date());
+  }, 1000);
+});
+
+onBeforeUnmount(() => {
+  if (currentTimeTimer) {
+    clearInterval(currentTimeTimer);
+    currentTimeTimer = null;
   }
 });
 </script>
@@ -797,10 +828,22 @@ onMounted(async () => {
         <h1 class="text-lg font-bold">停车收费记录解析工具</h1>
         <p class="text-slate-400 text-xs">
           解析 ZIP 压缩包中的进出场记录表，支持查看与统计
-          <span v-if="backendInfo" class="ml-2 text-slate-500">[{{ backendInfo }}]</span>
         </p>
         <p v-if="dbPath" class="text-slate-500 text-xs">{{ dbPath }}</p>
       </div>
+      <div class="flex-1 flex justify-center px-4">
+        <div class="bg-amber-500/15 border border-amber-500/40 rounded-lg px-4 py-2 text-center">
+          <div class="flex items-center justify-center gap-2 text-amber-300 text-sm font-medium">
+            <span class="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+            <span>请使用最新数据</span>
+          </div>
+          <div class="text-amber-200 text-xs mt-1 space-x-3">
+            <span>数据更新时间：{{ lastImportTime || "暂无导入记录" }}</span>
+            <span>当前时间：{{ currentTime }}</span>
+          </div>
+        </div>
+      </div>
+
       <div class="flex items-center gap-3">
         <button
           @click="handleClear"
@@ -870,6 +913,13 @@ onMounted(async () => {
         <FilterStats
           v-if="activeMenu === 'records'"
           :stats="filterStats"
+          :loading="loading"
+          :progress="progress"
+          :progress-text="progressText"
+        />
+
+        <ImportProgress
+          v-if="activeMenu === 'monthly' || activeMenu === 'free'"
           :loading="loading"
           :progress="progress"
           :progress-text="progressText"
