@@ -1,9 +1,10 @@
 use crate::db;
 use crate::db::models::{
     BuildingChargeItem, BuildingChargePlateDetail, BuildingChargesFilter, ParkingRecord,
-    VehicleMonthlyFilter, VehicleMonthlyItem, VehicleRecordsFilter,
+    UnpaidIntervalDetail, UnpaidIntervalFilter, UnpaidIntervalItem, VehicleMonthlyFilter,
+    VehicleMonthlyItem, VehicleRecordsFilter,
 };
-use rust_xlsxwriter::{Format, FormatAlign, Workbook, XlsxError};
+use rust_xlsxwriter::{Chart, ChartType, Format, FormatAlign, Workbook, XlsxError};
 use std::path::PathBuf;
 
 fn write_vehicle_charges_xlsx(
@@ -352,6 +353,255 @@ pub async fn export_building_charges_command(
         }
 
         write_building_charges_xlsx(&path, &details)
+            .map_err(|e| format!("生成 Excel 失败：{}", e))
+    })
+    .await
+    .map_err(|e| format!("导出任务执行异常：{}", e))?
+}
+
+fn write_unpaid_interval_stats_xlsx(
+    path: &PathBuf,
+    stats: &UnpaidIntervalItem,
+    intervals: &[UnpaidIntervalItem],
+    details: &[UnpaidIntervalDetail],
+    filter: &UnpaidIntervalFilter,
+) -> Result<(), XlsxError> {
+    let title_format = Format::new()
+        .set_bold()
+        .set_font_size(14)
+        .set_align(FormatAlign::Center)
+        .set_align(FormatAlign::VerticalCenter);
+    let header_format = Format::new()
+        .set_bold()
+        .set_background_color(0xF1F5F9)
+        .set_align(FormatAlign::Center)
+        .set_align(FormatAlign::VerticalCenter);
+    let center_format = Format::new()
+        .set_align(FormatAlign::Center)
+        .set_align(FormatAlign::VerticalCenter);
+    let right_format = Format::new()
+        .set_align(FormatAlign::Right)
+        .set_align(FormatAlign::VerticalCenter);
+    let money_format = Format::new()
+        .set_num_format("¥#,##0.00")
+        .set_align(FormatAlign::Right)
+        .set_align(FormatAlign::VerticalCenter);
+    let percent_format = Format::new()
+        .set_num_format("0.0%")
+        .set_align(FormatAlign::Right)
+        .set_align(FormatAlign::VerticalCenter);
+    let wrap_format = Format::new()
+        .set_align(FormatAlign::Left)
+        .set_align(FormatAlign::VerticalCenter)
+        .set_text_wrap();
+
+    let is_equal_width = filter.mode.as_deref() == Some("equal-width");
+    let summary_sheet_name = if is_equal_width {
+        "等宽分箱汇总"
+    } else {
+        "等频分箱汇总"
+    };
+    let title_text = if is_equal_width {
+        "欠费等宽分箱分析"
+    } else {
+        "欠费等频分箱分析"
+    };
+    let method_text = if is_equal_width {
+        "分区方法：等宽分箱（Equal-width binning）。将车辆累计欠费金额按固定金额区间均匀划分，每档金额范围相同，便于观察金额边界处的车辆分布。"
+    } else {
+        "分区方法：等频分箱（Equal-frequency binning）。将车辆按累计欠费金额排序后，按车辆数平均分配到各区间，保证每档车辆数量大致相同，适用于欠费金额长尾分布的场景。"
+    };
+
+    let mut workbook = Workbook::new();
+    workbook.add_worksheet();
+    workbook.add_worksheet();
+    workbook.add_worksheet();
+
+    let data_range = {
+        let worksheet = workbook.worksheet_from_index(0)?;
+        worksheet.set_name(summary_sheet_name)?;
+
+        // 标题
+        worksheet.merge_range(0, 0, 0, 4, title_text, &title_format)?;
+
+        // 汇总信息
+        worksheet.write(1, 0, "欠费车辆数")?;
+        worksheet.write(1, 1, stats.vehicle_count)?;
+        worksheet.write(1, 2, "欠费总额")?;
+        worksheet.write_with_format(1, 3, stats.total_unpaid as f64, &money_format)?;
+        worksheet.write(1, 4, "区间档数")?;
+        worksheet.write(1, 5, intervals.len() as u32)?;
+
+        // 时间条件
+        let mut time_parts = Vec::new();
+        if let Some(s) = &filter.entry_time_start {
+            time_parts.push(format!("进场时间起：{}", s));
+        }
+        if let Some(s) = &filter.entry_time_end {
+            time_parts.push(format!("进场时间止：{}", s));
+        }
+        if let Some(s) = &filter.exit_time_start {
+            time_parts.push(format!("出场时间起：{}", s));
+        }
+        if let Some(s) = &filter.exit_time_end {
+            time_parts.push(format!("出场时间止：{}", s));
+        }
+        let time_text = if time_parts.is_empty() {
+            "时间条件：无".to_string()
+        } else {
+            time_parts.join("，")
+        };
+        worksheet.merge_range(2, 0, 2, 4, &time_text, &center_format)?;
+
+        // 方法说明
+        worksheet.merge_range(3, 0, 3, 4, method_text, &wrap_format)?;
+        worksheet.set_row_height(3, 48.0)?;
+
+        // 表头
+        let headers = ["欠费区间", "车辆数", "车辆占比", "欠费总额", "金额占比"];
+        for (col, header) in headers.iter().enumerate() {
+            worksheet.write_with_format(5, col as u16, *header, &header_format)?;
+        }
+
+        let total_count = stats.vehicle_count as f64;
+        let total_unpaid = stats.total_unpaid as f64;
+
+        let mut vehicle_ratio_sum = 0.0;
+        let mut amount_ratio_sum = 0.0;
+
+        let data_start_row = 6u32;
+        let mut row = data_start_row;
+        for (index, item) in intervals.iter().enumerate() {
+            let is_last = index == intervals.len() - 1;
+            let vehicle_ratio = if total_count <= 0.0 {
+                0.0
+            } else if is_last {
+                f64::max(1.0 - vehicle_ratio_sum, 0.0)
+            } else {
+                item.vehicle_count as f64 / total_count
+            };
+            let amount_ratio = if total_unpaid <= 0.0 {
+                0.0
+            } else if is_last {
+                f64::max(1.0 - amount_ratio_sum, 0.0)
+            } else {
+                item.total_unpaid as f64 / total_unpaid
+            };
+            vehicle_ratio_sum += vehicle_ratio;
+            amount_ratio_sum += amount_ratio;
+
+            worksheet.write_with_format(row, 0, &item.range, &center_format)?;
+            worksheet.write_with_format(row, 1, item.vehicle_count, &right_format)?;
+            worksheet.write_with_format(row, 2, vehicle_ratio, &percent_format)?;
+            worksheet.write_with_format(row, 3, item.total_unpaid as f64, &money_format)?;
+            worksheet.write_with_format(row, 4, amount_ratio, &percent_format)?;
+            row += 1;
+        }
+        let data_end_row = row - 1;
+
+        // 合计行
+        worksheet.write_with_format(row, 0, "合计", &header_format)?;
+        worksheet.write_with_format(row, 1, stats.vehicle_count, &header_format)?;
+        worksheet.write_with_format(row, 2, 1.0, &percent_format)?;
+        worksheet.write_with_format(row, 3, stats.total_unpaid as f64, &money_format)?;
+        worksheet.write_with_format(row, 4, 1.0, &percent_format)?;
+
+        // 列宽
+        worksheet.set_column_width(0, 18.0)?;
+        worksheet.set_column_width(1, 12.0)?;
+        worksheet.set_column_width(2, 12.0)?;
+        worksheet.set_column_width(3, 14.0)?;
+        worksheet.set_column_width(4, 12.0)?;
+
+        worksheet.set_freeze_panes(6, 0)?;
+
+        (data_start_row, data_end_row)
+    };
+
+    // 插入柱状图到独立的 sheet
+    if !intervals.is_empty() {
+        let chart_sheet = workbook.worksheet_from_index(1)?;
+        chart_sheet.set_name("车辆分布图")?;
+
+        let mut chart = Chart::new(ChartType::Column);
+        chart.title().set_name("车辆分布");
+        chart.x_axis().set_name("欠费区间");
+        chart.y_axis().set_name("车辆数");
+        chart.set_width(640);
+        chart.set_height(400);
+
+        let (data_start_row, data_end_row) = data_range;
+        let categories = (summary_sheet_name, data_start_row, 0, data_end_row, 0);
+        let values = (summary_sheet_name, data_start_row, 1, data_end_row, 1);
+
+        let series = chart.add_series();
+        series.set_categories(categories);
+        series.set_values(values);
+        series.set_name("车辆数");
+
+        chart_sheet.insert_chart(1, 1, &chart)?;
+    }
+
+    // 第三个 sheet：车辆明细
+    {
+        let detail_sheet = workbook.worksheet_from_index(2)?;
+        detail_sheet.set_name("车辆明细")?;
+
+        let detail_title = if is_equal_width {
+            "等宽分箱车辆明细"
+        } else {
+            "等频分箱车辆明细"
+        };
+        detail_sheet.merge_range(0, 0, 0, 2, detail_title, &title_format)?;
+
+        let detail_headers = ["欠费区间", "车牌号", "欠费金额"];
+        for (col, header) in detail_headers.iter().enumerate() {
+            detail_sheet.write_with_format(1, col as u16, *header, &header_format)?;
+        }
+
+        let mut row = 2u32;
+        for detail in details {
+            let block_start = row;
+            for vehicle in &detail.vehicles {
+                detail_sheet.write_with_format(row, 0, &detail.range, &center_format)?;
+                detail_sheet.write_with_format(row, 1, &vehicle.plate, &center_format)?;
+                detail_sheet.write_with_format(row, 2, vehicle.unpaid as f64, &money_format)?;
+                row += 1;
+            }
+            let block_end = row - 1;
+            if block_end > block_start {
+                detail_sheet.merge_range(block_start, 0, block_end, 0, &detail.range, &center_format)?;
+            }
+        }
+
+        detail_sheet.set_column_width(0, 18.0)?;
+        detail_sheet.set_column_width(1, 16.0)?;
+        detail_sheet.set_column_width(2, 14.0)?;
+        detail_sheet.set_freeze_panes(2, 0)?;
+    }
+
+    workbook.save(path)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn export_unpaid_interval_stats_command(
+    file_path: String,
+    filter: UnpaidIntervalFilter,
+) -> Result<(), String> {
+    let path = PathBuf::from(file_path);
+
+    tokio::task::spawn_blocking(move || {
+        let stats = db::get_unpaid_interval_stats(filter.clone())?;
+        let details = db::get_unpaid_interval_details(filter.clone())?;
+        let summary = UnpaidIntervalItem {
+            range: String::new(),
+            min: 0,
+            max: None,
+            vehicle_count: stats.total_vehicles,
+            total_unpaid: stats.total_unpaid,
+        };
+        write_unpaid_interval_stats_xlsx(&path, &summary, &stats.intervals, &details, &filter)
             .map_err(|e| format!("生成 Excel 失败：{}", e))
     })
     .await

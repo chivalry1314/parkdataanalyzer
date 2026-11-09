@@ -6,6 +6,7 @@ mod db;
 
 use commands::export::{
     export_building_charges_command,
+    export_unpaid_interval_stats_command,
     export_vehicle_charges_command,
 };
 use commands::info::get_backend_info_command;
@@ -20,6 +21,7 @@ use commands::records::{
     get_building_charges_command,
     get_setting_command,
     get_top_unpaid_vehicles_command,
+    get_unpaid_interval_stats_command,
     list_free_cars_command,
     list_monthly_card_ledgers_command,
     list_monthly_rentals_command,
@@ -58,6 +60,7 @@ fn main() {
             get_vehicle_monthly_stats_command,
             list_vehicle_records_command,
             get_top_unpaid_vehicles_command,
+            get_unpaid_interval_stats_command,
             get_db_path_command,
             get_default_db_path_command,
             set_db_path_command,
@@ -65,6 +68,7 @@ fn main() {
             set_setting_command,
             export_vehicle_charges_command,
             export_building_charges_command,
+            export_unpaid_interval_stats_command,
             save_monthly_rentals_command,
             list_monthly_rentals_command,
             clear_monthly_rentals_command,

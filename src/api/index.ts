@@ -12,6 +12,8 @@ import type {
   StatsSummary,
   TopUnpaidVehicle,
   TopUnpaidVehiclesFilter,
+  UnpaidIntervalFilter,
+  UnpaidIntervalStats,
   VehicleMonthlyItem,
 } from "../types";
 
@@ -378,3 +380,28 @@ export const exportVehicleCharges = (filePath: string, filter: VehicleMonthlyFil
     exit_time_start: filter.exitTimeStart,
     exit_time_end: filter.exitTimeEnd,
   } });
+
+export const getUnpaidIntervalStats = (filter: UnpaidIntervalFilter = {}) =>
+  invoke<UnpaidIntervalStats>("get_unpaid_interval_stats_command", {
+    filter: {
+      entry_time_start: filter.entryTimeStart,
+      entry_time_end: filter.entryTimeEnd,
+      exit_time_start: filter.exitTimeStart,
+      exit_time_end: filter.exitTimeEnd,
+      bins: filter.bins,
+      mode: filter.mode,
+    },
+  });
+
+export const exportUnpaidIntervalStats = (filePath: string, filter: UnpaidIntervalFilter = {}) =>
+  invoke<void>("export_unpaid_interval_stats_command", {
+    filePath,
+    filter: {
+      entry_time_start: filter.entryTimeStart,
+      entry_time_end: filter.entryTimeEnd,
+      exit_time_start: filter.exitTimeStart,
+      exit_time_end: filter.exitTimeEnd,
+      bins: filter.bins,
+      mode: filter.mode,
+    },
+  });

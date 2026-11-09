@@ -1365,6 +1365,255 @@ pub fn list_vehicle_records(filter: VehicleRecordsFilter) -> Result<Paginated<Pa
     })
 }
 
+fn build_unpaid_interval_where(filter: &UnpaidIntervalFilter) -> String {
+    let mut conditions: Vec<String> = vec![];
+    if let Some(s) = &filter.entry_time_start {
+        if !s.is_empty() {
+            conditions.push(format!("entry_time >= '{}'", s.replace("'", "''")));
+        }
+    }
+    if let Some(s) = &filter.entry_time_end {
+        if !s.is_empty() {
+            conditions.push(format!("entry_time <= '{}'", s.replace("'", "''")));
+        }
+    }
+    if let Some(s) = &filter.exit_time_start {
+        if !s.is_empty() {
+            conditions.push(format!("exit_time >= '{}'", s.replace("'", "''")));
+        }
+    }
+    if let Some(s) = &filter.exit_time_end {
+        if !s.is_empty() {
+            conditions.push(format!("exit_time <= '{}'", s.replace("'", "''")));
+        }
+    }
+    if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    }
+}
+
+fn format_interval_range(n: usize, min: i64, max: i64) -> String {
+    if n == 1 {
+        if min == max {
+            format!("{} 元", min)
+        } else {
+            format!("{} ~ {} 元", min, max)
+        }
+    } else if min == max {
+        format!("{} 元", min)
+    } else {
+        format!("{} ~ {} 元", min, max)
+    }
+}
+
+fn quantile_bin_details(
+    mut vehicles: Vec<UnpaidIntervalVehicle>,
+    n: usize,
+) -> Vec<UnpaidIntervalDetail> {
+    if vehicles.is_empty() || n == 0 {
+        return vec![];
+    }
+
+    vehicles.sort_by_key(|v| v.unpaid);
+    let total = vehicles.len();
+    let base = total / n;
+    let mut extra = total % n;
+
+    let mut bins = Vec::with_capacity(n);
+    let mut start = 0;
+
+    for _ in 0..n {
+        let size = base + if extra > 0 { 1 } else { 0 };
+        if size == 0 {
+            continue;
+        }
+        let end = (start + size).min(total);
+        let min = vehicles[start].unpaid;
+        let max = vehicles[end - 1].unpaid;
+
+        bins.push(UnpaidIntervalDetail {
+            range: format_interval_range(n, min, max),
+            min,
+            max: Some(max),
+            vehicles: vehicles[start..end].to_vec(),
+        });
+
+        start = end;
+        if extra > 0 {
+            extra -= 1;
+        }
+    }
+
+    bins
+}
+
+fn get_vehicle_unpaids(
+    conn: &rusqlite::Connection,
+    filter: &UnpaidIntervalFilter,
+) -> Result<Vec<UnpaidIntervalVehicle>, String> {
+    let where_clause = build_unpaid_interval_where(filter);
+    let sql = format!(
+        "SELECT plate, COALESCE(SUM(due_amount - paid_amount), 0) AS unpaid
+         FROM parking_records {}
+         GROUP BY plate
+         ORDER BY unpaid",
+        where_clause
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let vehicles = stmt
+        .query_map([], |row| {
+            Ok(UnpaidIntervalVehicle {
+                plate: row.get(0)?,
+                unpaid: row.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(vehicles)
+}
+
+fn equal_width_bin_details(
+    vehicles: Vec<UnpaidIntervalVehicle>,
+    n: usize,
+) -> Vec<UnpaidIntervalDetail> {
+    if vehicles.is_empty() || n == 0 {
+        return vec![];
+    }
+
+    let min = vehicles.iter().map(|v| v.unpaid).min().unwrap_or(0);
+    let max = vehicles.iter().map(|v| v.unpaid).max().unwrap_or(0);
+
+    if min == max {
+        return vec![UnpaidIntervalDetail {
+            range: format!("{} 元", min),
+            min,
+            max: Some(max),
+            vehicles,
+        }];
+    }
+
+    let width = ((max - min + n as i64 - 1) / n as i64).max(1);
+    let mut bins: Vec<UnpaidIntervalDetail> = (0..n)
+        .map(|i| {
+            let bin_min = min + i as i64 * width;
+            let bin_max = if i == n - 1 { max } else { bin_min + width - 1 };
+            UnpaidIntervalDetail {
+                range: format!("{} ~ {} 元", bin_min, bin_max),
+                min: bin_min,
+                max: Some(bin_max),
+                vehicles: vec![],
+            }
+        })
+        .collect();
+
+    for vehicle in vehicles {
+        let mut idx = ((vehicle.unpaid - min) / width) as usize;
+        if idx >= n {
+            idx = n - 1;
+        }
+        bins[idx].vehicles.push(vehicle);
+    }
+
+    bins.into_iter().filter(|b| !b.vehicles.is_empty()).collect()
+}
+
+pub fn get_unpaid_interval_details(
+    filter: UnpaidIntervalFilter,
+) -> Result<Vec<UnpaidIntervalDetail>, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let vehicles = get_vehicle_unpaids(&conn, &filter)?;
+    drop(conn);
+
+    let positive_vehicles: Vec<UnpaidIntervalVehicle> =
+        vehicles.into_iter().filter(|v| v.unpaid > 0).collect();
+    let total_vehicles = positive_vehicles.len();
+
+    let bins = std::cmp::max(filter.bins.unwrap_or(5), 1) as usize;
+    let n = bins.min(total_vehicles.max(1));
+
+    if filter.mode.as_deref() == Some("equal-width") {
+        Ok(equal_width_bin_details(positive_vehicles, n))
+    } else {
+        Ok(quantile_bin_details(positive_vehicles, n))
+    }
+}
+
+pub fn get_unpaid_interval_stats(filter: UnpaidIntervalFilter) -> Result<UnpaidIntervalStats, String> {
+    let details = get_unpaid_interval_details(filter)?;
+
+    let total_vehicles: i64 = details.iter().map(|d| d.vehicles.len() as i64).sum();
+    let total_unpaid: i64 = details
+        .iter()
+        .flat_map(|d| d.vehicles.iter().map(|v| v.unpaid))
+        .sum();
+
+    let all_unpaids: Vec<i64> = details
+        .iter()
+        .flat_map(|d| d.vehicles.iter().map(|v| v.unpaid))
+        .collect();
+
+    let mean = if total_vehicles > 0 {
+        total_unpaid as f64 / total_vehicles as f64
+    } else {
+        0.0
+    };
+
+    let median = if all_unpaids.is_empty() {
+        0.0
+    } else {
+        let mid = all_unpaids.len() / 2;
+        if all_unpaids.len() % 2 == 0 {
+            (all_unpaids[mid - 1] as f64 + all_unpaids[mid] as f64) / 2.0
+        } else {
+            all_unpaids[mid] as f64
+        }
+    };
+
+    let variance = if total_vehicles > 1 {
+        all_unpaids
+            .iter()
+            .map(|v| {
+                let diff = *v as f64 - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / (total_vehicles as f64 - 1.0)
+    } else {
+        0.0
+    };
+    let std_dev = variance.sqrt();
+
+    let min = all_unpaids.first().copied().unwrap_or(0);
+    let max = all_unpaids.last().copied().unwrap_or(0);
+
+    let intervals = details
+        .into_iter()
+        .map(|d| UnpaidIntervalItem {
+            range: d.range,
+            min: d.min,
+            max: d.max,
+            vehicle_count: d.vehicles.len() as i64,
+            total_unpaid: d.vehicles.iter().map(|v| v.unpaid).sum(),
+        })
+        .collect();
+
+    Ok(UnpaidIntervalStats {
+        intervals,
+        total_vehicles,
+        total_unpaid,
+        mean,
+        median,
+        std_dev,
+        min,
+        max,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

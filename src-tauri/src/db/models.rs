@@ -350,6 +350,58 @@ pub struct TopUnpaidVehiclesFilter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnpaidIntervalItem {
+    pub range: String,
+    pub min: i64,
+    #[serde(rename = "max")]
+    pub max: Option<i64>,
+    #[serde(rename = "vehicleCount")]
+    pub vehicle_count: i64,
+    #[serde(rename = "totalUnpaid")]
+    pub total_unpaid: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnpaidIntervalStats {
+    pub intervals: Vec<UnpaidIntervalItem>,
+    #[serde(rename = "totalVehicles")]
+    pub total_vehicles: i64,
+    #[serde(rename = "totalUnpaid")]
+    pub total_unpaid: i64,
+    pub mean: f64,
+    pub median: f64,
+    #[serde(rename = "stdDev")]
+    pub std_dev: f64,
+    pub min: i64,
+    pub max: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UnpaidIntervalFilter {
+    pub entry_time_start: Option<String>,
+    pub entry_time_end: Option<String>,
+    pub exit_time_start: Option<String>,
+    pub exit_time_end: Option<String>,
+    pub bins: Option<i64>,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnpaidIntervalVehicle {
+    pub plate: String,
+    pub unpaid: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnpaidIntervalDetail {
+    pub range: String,
+    pub min: i64,
+    #[serde(rename = "max")]
+    pub max: Option<i64>,
+    pub vehicles: Vec<UnpaidIntervalVehicle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsResult {
     pub summary: StatsSummary,
     #[serde(rename = "vehicleTypeDistribution")]

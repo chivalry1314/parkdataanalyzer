@@ -227,6 +227,34 @@ export interface TopUnpaidVehiclesFilter {
   perPage: number;
 }
 
+export interface UnpaidIntervalItem {
+  range: string;
+  min: number;
+  max?: number;
+  vehicleCount: number;
+  totalUnpaid: number;
+}
+
+export interface UnpaidIntervalStats {
+  intervals: UnpaidIntervalItem[];
+  totalVehicles: number;
+  totalUnpaid: number;
+  mean: number;
+  median: number;
+  stdDev: number;
+  min: number;
+  max: number;
+}
+
+export interface UnpaidIntervalFilter {
+  entryTimeStart?: string;
+  entryTimeEnd?: string;
+  exitTimeStart?: string;
+  exitTimeEnd?: string;
+  bins?: number;
+  mode?: "equal-freq" | "equal-width";
+}
+
 export interface StatsResult {
   summary: StatsSummary;
   vehicleTypeDistribution: DistributionItem[];

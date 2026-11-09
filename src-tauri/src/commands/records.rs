@@ -27,6 +27,11 @@ pub fn get_top_unpaid_vehicles_command(filter: TopUnpaidVehiclesFilter) -> Resul
 }
 
 #[tauri::command]
+pub fn get_unpaid_interval_stats_command(filter: UnpaidIntervalFilter) -> Result<UnpaidIntervalStats, String> {
+    db::get_unpaid_interval_stats(filter)
+}
+
+#[tauri::command]
 pub fn export_all_records_command() -> Result<Vec<ParkingRecord>, String> {
     db::export_all_records()
 }

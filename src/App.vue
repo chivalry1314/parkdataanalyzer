@@ -6,6 +6,7 @@ import BuildingCharges from "./components/BuildingCharges.vue";
 import FilterStats from "./components/FilterStats.vue";
 import FreeCars from "./components/FreeCars.vue";
 import ImportProgress from "./components/ImportProgress.vue";
+import IntervalAnalysis from "./components/IntervalAnalysis.vue";
 import MonthlyCardLedgerComponent from "./components/MonthlyCardLedger.vue";
 import MonthlyRentals from "./components/MonthlyRentals.vue";
 import RecordList from "./components/RecordList.vue";
@@ -56,7 +57,18 @@ const progress = ref(0);
 const progressText = ref("准备中...");
 const messageText = ref("");
 const messageType = ref<"info" | "error">("info");
-const activeMenu = ref<"records" | "stats" | "vehicle" | "monthly" | "free" | "building" | "settings" | "monthlyCardLedger">("records");
+const activeMenu = ref<
+  | "records"
+  | "stats"
+  | "vehicle"
+  | "monthly"
+  | "free"
+  | "building"
+  | "settings"
+  | "monthlyCardLedger"
+  | "intervalEqualFreq"
+  | "intervalEqualWidth"
+>("records");
 const menuCollapsed = ref(false);
 const dbReady = ref<boolean | null>(null);
 const dbPath = ref("");
@@ -79,16 +91,60 @@ async function updateLastImportTime() {
   }
 }
 
-const menuItems = [
+interface MenuChild {
+  key: "intervalEqualFreq" | "intervalEqualWidth";
+  label: string;
+}
+
+interface MenuGroup {
+  key: string;
+  label: string;
+  short: string;
+  children?: MenuChild[];
+}
+
+const menuGroups: MenuGroup[] = [
   { key: "records", label: "记录列表", short: "列" },
   { key: "monthly", label: "月租车", short: "月" },
   { key: "free", label: "免费车", short: "免" },
   { key: "monthlyCardLedger", label: "月卡台账", short: "卡" },
   { key: "building", label: "楼栋收费", short: "栋" },
   { key: "vehicle", label: "车辆收费", short: "车" },
+  {
+    key: "interval",
+    label: "区间分析",
+    short: "区",
+    children: [
+      { key: "intervalEqualFreq", label: "等频分箱" },
+      { key: "intervalEqualWidth", label: "等宽分箱" },
+    ],
+  },
   { key: "stats", label: "统计分析", short: "统" },
   { key: "settings", label: "设置", short: "设" },
-] as const;
+];
+
+const expandedMenus = ref<Set<string>>(new Set(["interval"]));
+
+function toggleMenu(key: string) {
+  const next = new Set(expandedMenus.value);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  expandedMenus.value = next;
+}
+
+function setActiveMenu(key: string) {
+  activeMenu.value = key as typeof activeMenu.value;
+}
+
+function isMenuActive(groupKey: string): boolean {
+  if (activeMenu.value === groupKey) return true;
+  const group = menuGroups.find((g) => g.key === groupKey);
+  if (!group || !group.children) return false;
+  return group.children.some((c) => c.key === activeMenu.value);
+}
 
 const records = ref<ParkingRecord[]>([]);
 const total = ref(0);
@@ -890,22 +946,74 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <nav class="flex-1 p-3 space-y-1">
-          <button
-            v-for="item in menuItems"
-            :key="item.key"
-            @click="activeMenu = item.key"
-            :class="[
-              'w-full rounded-lg text-sm font-medium transition flex items-center',
-              activeMenu === item.key
-                ? 'bg-blue-600 text-white'
-                : 'text-slate-300 hover:bg-slate-700',
-              menuCollapsed ? 'justify-center px-2 py-3' : 'text-left px-4 py-3',
-            ]"
-            :title="item.label"
-          >
-            <span v-if="menuCollapsed" class="text-base">{{ item.short }}</span>
-            <span v-else>{{ item.label }}</span>
-          </button>
+          <template v-for="group in menuGroups" :key="group.key">
+            <button
+              v-if="!group.children"
+              @click="setActiveMenu(group.key)"
+              :class="[
+                'w-full rounded-lg text-sm font-medium transition flex items-center',
+                activeMenu === group.key
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-300 hover:bg-slate-700',
+                menuCollapsed ? 'justify-center px-2 py-3' : 'text-left px-4 py-3',
+              ]"
+              :title="group.label"
+            >
+              <span v-if="menuCollapsed" class="text-base">{{ group.short }}</span>
+              <span v-else>{{ group.label }}</span>
+            </button>
+
+            <div v-else class="space-y-1">
+              <button
+                @click="toggleMenu(group.key)"
+                :class="[
+                  'w-full rounded-lg text-sm font-medium transition flex items-center',
+                  isMenuActive(group.key)
+                    ? 'bg-blue-600 text-white'
+                    : 'text-slate-300 hover:bg-slate-700',
+                  menuCollapsed ? 'justify-center px-2 py-3' : 'text-left px-4 py-3',
+                ]"
+                :title="group.label"
+              >
+                <span v-if="menuCollapsed" class="text-base">{{ group.short }}</span>
+                <template v-else>
+                  <span class="flex-1">{{ group.label }}</span>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    class="h-4 w-4 transition-transform duration-200"
+                    :class="expandedMenus.has(group.key) ? 'rotate-90' : ''"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                  >
+                    <path
+                      fill-rule="evenodd"
+                      d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                </template>
+              </button>
+
+              <div
+                v-show="!menuCollapsed && expandedMenus.has(group.key)"
+                class="pl-4 space-y-1"
+              >
+                <button
+                  v-for="child in group.children"
+                  :key="child.key"
+                  @click="setActiveMenu(child.key)"
+                  :class="[
+                    'w-full rounded-lg text-sm font-medium transition text-left px-4 py-2',
+                    activeMenu === child.key
+                      ? 'bg-blue-500 text-white'
+                      : 'text-slate-300 hover:bg-slate-700',
+                  ]"
+                >
+                  {{ child.label }}
+                </button>
+              </div>
+            </div>
+          </template>
         </nav>
       </aside>
 
@@ -1019,6 +1127,14 @@ onBeforeUnmount(() => {
             ref="buildingChargesRef"
             :loading="buildingChargesLoading"
             @search="handleBuildingChargesSearch"
+          />
+          <IntervalAnalysis
+            v-else-if="activeMenu === 'intervalEqualFreq'"
+            mode="equal-freq"
+          />
+          <IntervalAnalysis
+            v-else-if="activeMenu === 'intervalEqualWidth'"
+            mode="equal-width"
           />
           <div v-else-if="activeMenu === 'stats'" class="h-full overflow-auto pr-2 pb-2">
             <StatsPanel :refresh-key="statsRefreshKey" />
