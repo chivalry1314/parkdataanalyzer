@@ -117,6 +117,11 @@ pub fn list_monthly_card_ledgers_command(filter: ListMonthlyCardLedgerFilter) ->
 }
 
 #[tauri::command]
+pub fn get_monthly_card_ledger_stats_command(filter: ListMonthlyCardLedgerFilter) -> Result<MonthlyCardLedgerStats, String> {
+    db::get_monthly_card_ledger_stats(filter)
+}
+
+#[tauri::command]
 pub fn clear_monthly_card_ledgers_command() -> Result<usize, String> {
     db::clear_monthly_card_ledgers()
 }

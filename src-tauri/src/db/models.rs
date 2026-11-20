@@ -293,6 +293,18 @@ pub struct ListMonthlyCardLedgerFilter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonthlyCardLedgerStats {
+    #[serde(rename = "totalCount")]
+    pub total_count: i64,
+    #[serde(rename = "totalRent")]
+    pub total_rent: i64,
+    #[serde(rename = "totalManagementFee")]
+    pub total_management_fee: i64,
+    #[serde(rename = "totalAmount")]
+    pub total_amount: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildingChargeItem {
     #[serde(rename = "building")]
     pub building: String,

@@ -154,6 +154,28 @@ export interface MonthlyCardLedgerFilters {
   processDateEnd: string;
 }
 
+export interface MonthlyCardLedgerStats {
+  totalCount: number;
+  totalRent: number;
+  totalManagementFee: number;
+  totalAmount: number;
+}
+
+export interface MonthlyCardLedgerCheckIssue {
+  rowIndex: number;
+  plate: string;
+  field: string;
+  issue: string;
+  value: string;
+}
+
+export interface MonthlyCardLedgerCheckResult {
+  total: number;
+  valid: number;
+  invalid: number;
+  issues: MonthlyCardLedgerCheckIssue[];
+}
+
 export interface BuildingChargesFilters {
   building: string;
   unit: string;

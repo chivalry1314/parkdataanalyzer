@@ -4,6 +4,8 @@ import type {
   FreeCar,
   FreeCarParseResult,
   MonthlyCardLedger,
+  MonthlyCardLedgerCheckIssue,
+  MonthlyCardLedgerCheckResult,
   MonthlyCardLedgerParseResult,
   MonthlyRentalParseResult,
   MonthlyRentalVehicle,
@@ -480,6 +482,77 @@ function parseStringCell(value: unknown): string {
   return String(value).replace(/\n/g, " ").trim();
 }
 
+function formatDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function excelSerialToDate(serial: number): Date | null {
+  if (serial <= 0 || serial > 50000) return null;
+  const epoch = new Date(1899, 11, 30);
+  return new Date(epoch.getTime() + serial * 24 * 60 * 60 * 1000);
+}
+
+function normalizeDate(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "";
+
+  if (typeof value === "number") {
+    const date = excelSerialToDate(value);
+    return date ? formatDate(date) : String(value);
+  }
+
+  const s = String(value).trim();
+  if (!s) return "";
+
+  // Excel serial number exported as string, e.g. "45300"
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const date = excelSerialToDate(Number(s));
+    if (date) return formatDate(date);
+  }
+
+  // Common formats: 2024-01-15, 2024/01/15, 2024.01.15, 2024年01月15日, 2024-1-5
+  const m = s.match(/^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})[日]?$/);
+  if (m) {
+    const y = Number(m[1]);
+    const mon = Number(m[2]);
+    const d = Number(m[3]);
+    const date = new Date(y, mon - 1, d);
+    if (
+      date.getFullYear() === y &&
+      date.getMonth() === mon - 1 &&
+      date.getDate() === d
+    ) {
+      return formatDate(date);
+    }
+  }
+
+  // Compact format: 20240115
+  const compact = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) {
+    const y = Number(compact[1]);
+    const mon = Number(compact[2]);
+    const d = Number(compact[3]);
+    const date = new Date(y, mon - 1, d);
+    if (
+      date.getFullYear() === y &&
+      date.getMonth() === mon - 1 &&
+      date.getDate() === d
+    ) {
+      return formatDate(date);
+    }
+  }
+
+  // Fallback to native parser for ISO strings etc.
+  const date = new Date(s);
+  if (!Number.isNaN(date.getTime())) {
+    return formatDate(date);
+  }
+
+  return s;
+}
+
 function buildMonthlyCardLedgerRecord(
   row: unknown[],
   sourceFile: string,
@@ -495,7 +568,7 @@ function buildMonthlyCardLedgerRecord(
   return {
     id,
     seq: parseIntCell(row[0]),
-    processDate: parseStringCell(row[1]),
+    processDate: normalizeDate(row[1]),
     roomNumber: parseStringCell(row[2]),
     ownerName: parseStringCell(row[3]),
     ownerPhone: parseStringCell(row[4]),
@@ -545,6 +618,158 @@ export function parseMonthlyCardLedgerXlsxFile(
   }
 
   return { records, errors };
+}
+
+function isValidDateString(value: string): boolean {
+  if (!value) return false;
+  const normalized = normalizeDate(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized);
+}
+
+function isFutureDate(value: string): boolean {
+  const normalized = normalizeDate(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return false;
+  const date = new Date(normalized);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return date.getTime() > today.getTime();
+}
+
+export function checkMonthlyCardLedgerXlsxFile(
+  data: Uint8Array,
+  sourceFile: string,
+  onProgress?: (current: number, total: number) => void
+): Promise<MonthlyCardLedgerCheckResult> {
+  return new Promise((resolve) => {
+    const records: MonthlyCardLedger[] = [];
+    const parseErrors: string[] = [];
+    let idCounter = 1;
+
+    try {
+      const workbook = XLSX.read(data, { type: "array", cellText: true, cellDates: false });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false }) as unknown[][];
+
+      if (rows.length < 4) {
+        parseErrors.push("Excel 文件内容不足，至少需要包含表头和一行数据");
+        resolve({ total: 0, valid: 0, invalid: 0, issues: parseErrors.map((e) => ({ rowIndex: 0, plate: "", field: "文件解析", issue: e, value: "" })) });
+        return;
+      }
+
+      for (let i = 3; i < rows.length; i++) {
+        const record = buildMonthlyCardLedgerRecord(rows[i], sourceFile, idCounter++);
+        if (record) {
+          (record as unknown as { __rowIndex: number }).__rowIndex = i + 1;
+          records.push(record);
+        }
+      }
+    } catch (err) {
+      parseErrors.push(`解析文件失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    if (parseErrors.length > 0) {
+      resolve({
+        total: 0,
+        valid: 0,
+        invalid: 0,
+        issues: parseErrors.map((e) => ({ rowIndex: 0, plate: "", field: "文件解析", issue: e, value: "" })),
+      });
+      return;
+    }
+
+    const issues: MonthlyCardLedgerCheckIssue[] = [];
+    const seenKeys = new Set<string>();
+    const batchSize = 100;
+    let index = 0;
+
+    onProgress?.(0, records.length);
+
+    function processBatch() {
+      const end = Math.min(index + batchSize, records.length);
+      for (let i = index; i < end; i++) {
+        const record = records[i];
+        const rowIndex = (record as unknown as { __rowIndex: number }).__rowIndex ?? record.seq;
+        const recordIssues: MonthlyCardLedgerCheckIssue[] = [];
+
+        if (!record.plate.trim()) {
+          recordIssues.push({ rowIndex, plate: "", field: "车牌号", issue: "车牌号不能为空", value: "" });
+        } else if (!/[\u4e00-\u9fa5][A-Z][A-Z0-9]{4,5}/.test(record.plate) && !/[A-Z][A-Z0-9]{4,5}/.test(record.plate)) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "车牌号", issue: "车牌号格式不规范", value: record.plate });
+        }
+
+        if (!record.processDate) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "办理日期", issue: "办理日期不能为空", value: record.processDate });
+        } else if (!isValidDateString(record.processDate)) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "办理日期", issue: "办理日期格式不正确", value: record.processDate });
+        } else if (isFutureDate(record.processDate)) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "办理日期", issue: "办理日期不能为未来日期", value: record.processDate });
+        }
+
+        if (!record.ownerName.trim()) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "车主姓名", issue: "车主姓名不能为空", value: record.ownerName });
+        }
+
+        if (record.rent < 0) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "租金", issue: "租金不能为负数", value: String(record.rent) });
+        }
+
+        if (record.managementFee < 0) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "管理费", issue: "管理费不能为负数", value: String(record.managementFee) });
+        }
+
+        if (record.rent === 0 && record.managementFee === 0) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "费用", issue: "租金和管理费不能同时为 0", value: `租金=${record.rent}, 管理费=${record.managementFee}` });
+        }
+
+        if (record.paymentMonths <= 0) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "缴费月数", issue: "缴费月数应大于 0", value: String(record.paymentMonths) });
+        }
+
+        if (record.actualMonths < 0) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "授权月数", issue: "授权月数不能为负数", value: String(record.actualMonths) });
+        }
+
+        if (record.actualStartDate || record.actualEndDate) {
+          if (!isValidDateString(record.actualStartDate) || !isValidDateString(record.actualEndDate)) {
+            recordIssues.push({ rowIndex, plate: record.plate, field: "授权时间", issue: "授权开始/结束日期格式不正确", value: `${record.actualStartDate} ~ ${record.actualEndDate}` });
+          } else if (new Date(record.actualStartDate) > new Date(record.actualEndDate)) {
+            recordIssues.push({ rowIndex, plate: record.plate, field: "授权时间", issue: "授权开始日期不能晚于结束日期", value: `${record.actualStartDate} ~ ${record.actualEndDate}` });
+          }
+        }
+
+        if (record.rentGifted && record.rent !== 0) {
+          recordIssues.push({ rowIndex, plate: record.plate, field: "租金赠送", issue: "勾选租金赠送时租金应为 0", value: String(record.rent) });
+        }
+
+        const duplicateKey = `${record.plate}|${record.processDate}|${record.paymentPeriod}`;
+        if (duplicateKey.replace(/\|/g, "")) {
+          if (seenKeys.has(duplicateKey)) {
+            recordIssues.push({ rowIndex, plate: record.plate, field: "重复记录", issue: "存在重复记录（同一车牌、办理日期、充费时间段）", value: duplicateKey });
+          } else {
+            seenKeys.add(duplicateKey);
+          }
+        }
+
+        issues.push(...recordIssues);
+      }
+      index = end;
+      onProgress?.(index, records.length);
+      if (index < records.length) {
+        setTimeout(processBatch, 0);
+      } else {
+        const invalid = new Set(issues.map((i) => i.rowIndex)).size;
+        resolve({
+          total: records.length,
+          valid: records.length - invalid,
+          invalid,
+          issues,
+        });
+      }
+    }
+
+    processBatch();
+  });
 }
 
 export function exportRecordsToCsv(records: ParkingRecord[]): string {

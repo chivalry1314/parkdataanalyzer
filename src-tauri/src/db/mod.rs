@@ -1040,6 +1040,34 @@ pub fn clear_monthly_card_ledgers() -> Result<usize, String> {
     Ok(count)
 }
 
+pub fn get_monthly_card_ledger_stats(filter: ListMonthlyCardLedgerFilter) -> Result<MonthlyCardLedgerStats, String> {
+    let db = db();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+
+    let where_clause = build_monthly_card_ledger_where_clause(&filter);
+
+    let sql = format!(
+        "SELECT
+            COUNT(*),
+            COALESCE(SUM(rent), 0),
+            COALESCE(SUM(management_fee), 0)
+         FROM monthly_card_ledger {}",
+        where_clause
+    );
+
+    conn.query_row(&sql, [], |row| {
+        let total_rent: i64 = row.get(1)?;
+        let total_management_fee: i64 = row.get(2)?;
+        Ok(MonthlyCardLedgerStats {
+            total_count: row.get(0)?,
+            total_rent,
+            total_management_fee,
+            total_amount: total_rent + total_management_fee,
+        })
+    })
+    .map_err(|e| e.to_string())
+}
+
 fn clean_owner_addresses(table: &str) -> Result<usize, String> {
     use once_cell::sync::Lazy;
     use regex::Regex;

@@ -8,6 +8,7 @@ import FreeCars from "./components/FreeCars.vue";
 import ImportProgress from "./components/ImportProgress.vue";
 import IntervalAnalysis from "./components/IntervalAnalysis.vue";
 import MonthlyCardLedgerComponent from "./components/MonthlyCardLedger.vue";
+import MonthlyCardLedgerStats from "./components/MonthlyCardLedgerStats.vue";
 import MonthlyRentals from "./components/MonthlyRentals.vue";
 import RecordList from "./components/RecordList.vue";
 import StatsPanel from "./components/StatsPanel.vue";
@@ -25,6 +26,7 @@ import {
   getBuildingCharges,
   getDbPath,
   getFilteredStats,
+  getMonthlyCardLedgerStats,
   getSetting,
   listFreeCars,
   setSetting,
@@ -44,6 +46,7 @@ import type {
   FreeCarFilters,
   MonthlyCardLedger,
   MonthlyCardLedgerFilters,
+  MonthlyCardLedgerStats as MonthlyCardLedgerStatsType,
   MonthlyRentalFilters,
   MonthlyRentalVehicle,
   ParkingRecord,
@@ -209,6 +212,7 @@ const monthlyCardLedgerFilters = ref<MonthlyCardLedgerFilters>({
   processDateEnd: "",
 });
 const appliedMonthlyCardLedgerFilters = ref<MonthlyCardLedgerFilters>({ ...monthlyCardLedgerFilters.value });
+const monthlyCardLedgerStats = ref<MonthlyCardLedgerStatsType | null>(null);
 
 const buildingChargesRef = ref<InstanceType<typeof BuildingCharges> | null>(null);
 const monthlyRentalsRef = ref<InstanceType<typeof MonthlyRentals> | null>(null);
@@ -436,17 +440,24 @@ async function handleSaveFreeCar(record: FreeCar) {
 
 async function loadMonthlyCardLedgers() {
   try {
-    const result = await listMonthlyCardLedgers({
+    const params = {
       plate: appliedMonthlyCardLedgerFilters.value.plate || undefined,
       ownerName: appliedMonthlyCardLedgerFilters.value.ownerName || undefined,
       roomNumber: appliedMonthlyCardLedgerFilters.value.roomNumber || undefined,
       processDateStart: appliedMonthlyCardLedgerFilters.value.processDateStart || undefined,
       processDateEnd: appliedMonthlyCardLedgerFilters.value.processDateEnd || undefined,
-      page: monthlyCardLedgerPage.value,
-      perPage: monthlyCardLedgerPageSize.value,
-    });
+    };
+    const [result, stats] = await Promise.all([
+      listMonthlyCardLedgers({
+        ...params,
+        page: monthlyCardLedgerPage.value,
+        perPage: monthlyCardLedgerPageSize.value,
+      }),
+      getMonthlyCardLedgerStats(params),
+    ]);
     monthlyCardLedgerRecords.value = result.items;
     monthlyCardLedgerTotal.value = result.total;
+    monthlyCardLedgerStats.value = stats;
   } catch (err) {
     showError(`加载月卡台账失败：${err instanceof Error ? err.message : String(err)}`);
   }
@@ -735,16 +746,8 @@ function handleError(text: string) {
   message(text, { title: "错误", kind: "error" });
 }
 
-async function handleClear() {
-  let confirmText = "确定要清空数据库中的所有停车记录吗？此操作不可恢复。";
-  if (activeMenu.value === "monthly") {
-    confirmText = "确定要清空数据库中的所有月租车记录吗？此操作不可恢复。";
-  } else if (activeMenu.value === "free") {
-    confirmText = "确定要清空数据库中的所有免费车记录吗？此操作不可恢复。";
-  } else if (activeMenu.value === "monthlyCardLedger") {
-    confirmText = "确定要清空数据库中的所有月卡台账记录吗？此操作不可恢复。";
-  }
-  const ok = await confirm(confirmText, {
+async function handleClearRecords() {
+  const ok = await confirm("确定要清空数据库中的所有停车记录吗？此操作不可恢复。", {
     title: "请确认",
     kind: "warning",
   });
@@ -752,69 +755,86 @@ async function handleClear() {
   loading.value = true;
   progressText.value = "正在清空数据库...";
   try {
-    if (activeMenu.value === "monthly") {
-      await clearMonthlyRentals();
-      showInfo("月租车记录已清空。");
-      monthlyPage.value = 1;
-      appliedMonthlyFilters.value = {
-        plate: "",
-        ownerName: "",
-        vehicleType: "",
-        startDateStart: "",
-        startDateEnd: "",
-        endDateStart: "",
-        endDateEnd: "",
-      };
-      monthlyFilters.value = { ...appliedMonthlyFilters.value };
-      await loadMonthlyRentals();
-    } else if (activeMenu.value === "free") {
-      await clearFreeCars();
-      showInfo("免费车记录已清空。");
-      freeCarPage.value = 1;
-      appliedFreeCarFilters.value = {
-        plate: "",
-        ownerName: "",
-        vehicleType: "",
-        startDateStart: "",
-        startDateEnd: "",
-        endDateStart: "",
-        endDateEnd: "",
-      };
-      freeCarFilters.value = { ...appliedFreeCarFilters.value };
-      await loadFreeCars();
-    } else if (activeMenu.value === "monthlyCardLedger") {
-      await clearMonthlyCardLedgers();
-      showInfo("月卡台账记录已清空。");
-      monthlyCardLedgerPage.value = 1;
-      appliedMonthlyCardLedgerFilters.value = {
-        plate: "",
-        ownerName: "",
-        roomNumber: "",
-        processDateStart: "",
-        processDateEnd: "",
-      };
-      monthlyCardLedgerFilters.value = { ...appliedMonthlyCardLedgerFilters.value };
-      await loadMonthlyCardLedgers();
-    } else {
-      await clearRecords();
-      showInfo("数据库已清空。");
-      page.value = 1;
-      appliedFilters.value = {
-        plate: "",
-        ownerName: "",
-        vehicleType: "",
-        chargeType: "",
-        releaseMethod: "",
-        paymentMethod: "",
-        entryTimeStart: "",
-        entryTimeEnd: "",
-        exitTimeStart: "",
-        exitTimeEnd: "",
-      };
-      filters.value = { ...appliedFilters.value };
-      await loadRecords();
-      statsRefreshKey.value++;
-    }
+    await clearRecords();
+    showInfo("数据库已清空。");
+    page.value = 1;
+    appliedFilters.value = {
+      plate: "",
+      ownerName: "",
+      vehicleType: "",
+      chargeType: "",
+      releaseMethod: "",
+      paymentMethod: "",
+      entryTimeStart: "",
+      entryTimeEnd: "",
+      exitTimeStart: "",
+      exitTimeEnd: "",
+    };
+    filters.value = { ...appliedFilters.value };
+    await loadRecords();
+    statsRefreshKey.value++;
+  } catch (err) {
+    showError(`清空失败：${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    loading.value = false;
+    progressText.value = "";
+  }
+}
+
+async function handleClearMonthlyRentals() {
+  const ok = await confirm("确定要清空数据库中的所有月租车记录吗？此操作不可恢复。", {
+    title: "请确认",
+    kind: "warning",
+  });
+  if (!ok) return;
+  loading.value = true;
+  progressText.value = "正在清空数据库...";
+  try {
+    await clearMonthlyRentals();
+    showInfo("月租车记录已清空。");
+    monthlyPage.value = 1;
+    appliedMonthlyFilters.value = {
+      plate: "",
+      ownerName: "",
+      vehicleType: "",
+      startDateStart: "",
+      startDateEnd: "",
+      endDateStart: "",
+      endDateEnd: "",
+    };
+    monthlyFilters.value = { ...appliedMonthlyFilters.value };
+    await loadMonthlyRentals();
+  } catch (err) {
+    showError(`清空失败：${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    loading.value = false;
+    progressText.value = "";
+  }
+}
+
+async function handleClearFreeCars() {
+  const ok = await confirm("确定要清空数据库中的所有免费车记录吗？此操作不可恢复。", {
+    title: "请确认",
+    kind: "warning",
+  });
+  if (!ok) return;
+  loading.value = true;
+  progressText.value = "正在清空数据库...";
+  try {
+    await clearFreeCars();
+    showInfo("免费车记录已清空。");
+    freeCarPage.value = 1;
+    appliedFreeCarFilters.value = {
+      plate: "",
+      ownerName: "",
+      vehicleType: "",
+      startDateStart: "",
+      startDateEnd: "",
+      endDateStart: "",
+      endDateEnd: "",
+    };
+    freeCarFilters.value = { ...appliedFreeCarFilters.value };
+    await loadFreeCars();
   } catch (err) {
     showError(`清空失败：${err instanceof Error ? err.message : String(err)}`);
   } finally {
@@ -900,15 +920,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="flex items-center gap-3">
-        <button
-          @click="handleClear"
-          :disabled="loading"
-          class="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm font-medium transition"
-        >
-          清空数据库
-        </button>
-      </div>
     </header>
 
     <div class="flex-1 flex overflow-hidden">
@@ -1026,6 +1037,11 @@ onBeforeUnmount(() => {
           :progress-text="progressText"
         />
 
+        <MonthlyCardLedgerStats
+          v-if="activeMenu === 'monthlyCardLedger'"
+          :stats="monthlyCardLedgerStats"
+        />
+
         <ImportProgress
           v-if="activeMenu === 'monthly' || activeMenu === 'free'"
           :loading="loading"
@@ -1069,6 +1085,7 @@ onBeforeUnmount(() => {
             :loading="loading"
             @search="handleSearch"
             @reset="handleReset"
+            @clear="handleClearRecords"
             @update:page-size="(v) => { pageSize = v; page = 1; loadRecords(); }"
             @import-zip="selectFile('records')"
           />
@@ -1086,6 +1103,7 @@ onBeforeUnmount(() => {
             @search="handleMonthlySearch"
             @reset="handleMonthlyReset"
             @save="handleSaveMonthlyRental"
+            @clear="handleClearMonthlyRentals"
             @update:page-size="(v) => { monthlyPageSize = v; monthlyPage = 1; loadMonthlyRentals(); }"
             @clean-addresses="handleCleanMonthlyRentalAddresses"
             @import-zip="selectFile('monthly')"
@@ -1104,6 +1122,7 @@ onBeforeUnmount(() => {
             @search="handleFreeCarSearch"
             @reset="handleFreeCarReset"
             @save="handleSaveFreeCar"
+            @clear="handleClearFreeCars"
             @update:page-size="(v) => { freeCarPageSize = v; freeCarPage = 1; loadFreeCars(); }"
             @clean-addresses="handleCleanFreeCarAddresses"
             @import-zip="selectFile('free')"

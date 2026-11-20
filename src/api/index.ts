@@ -5,6 +5,7 @@ import type {
   BuildingChargesFilters,
   FreeCar,
   MonthlyCardLedger,
+  MonthlyCardLedgerStats,
   MonthlyRentalVehicle,
   Paginated,
   ParkingRecord,
@@ -299,6 +300,19 @@ export const listMonthlyCardLedgers = async (
     perPage: raw.per_page,
   };
 };
+
+export const getMonthlyCardLedgerStats = (filter: Omit<ListMonthlyCardLedgerFilter, "page" | "perPage">) =>
+  invoke<MonthlyCardLedgerStats>("get_monthly_card_ledger_stats_command", {
+    filter: {
+      plate: filter.plate,
+      owner_name: filter.ownerName,
+      room_number: filter.roomNumber,
+      process_date_start: filter.processDateStart,
+      process_date_end: filter.processDateEnd,
+      page: 1,
+      per_page: 1,
+    },
+  });
 
 export const clearMonthlyCardLedgers = () =>
   invoke<number>("clear_monthly_card_ledgers_command");
